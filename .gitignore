@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Environments
+venv/
+ENV/
+env/
+.env
+
+# Application logs & database
+logs/
+heartbeat.json
+s3_delivery_simulation/
+
+# IDE files
+.vscode/
+.idea/
+.gemini/
+.agents/
+*.png
+*.webp
+*.log

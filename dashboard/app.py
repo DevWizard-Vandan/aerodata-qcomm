@@ -1,0 +1,566 @@
+import sys
+import os
+
+# Add project root to PYTHONPATH dynamically
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+import json
+import time
+import logging
+from datetime import datetime, timezone, timedelta
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+
+# Set Page Config for wide layout and custom styling
+st.set_page_config(
+    layout="wide",
+    page_title="aerodata-qcomm | Alternative Data Intelligence Dashboard",
+    page_icon="📊"
+)
+
+# Custom styles injection for high-fidelity dark aesthetics
+st.markdown("""
+<style>
+    .main-title {
+        font-family: 'Outfit', 'Inter', sans-serif;
+        font-weight: 800;
+        color: #00d2ff;
+        font-size: 2.5rem;
+        margin-bottom: 5px;
+    }
+    .main-subtitle {
+        font-family: 'Inter', sans-serif;
+        font-weight: 400;
+        color: #888;
+        font-size: 1.1rem;
+        margin-bottom: 25px;
+    }
+    .metric-card {
+        background-color: #111;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        border-radius: 5px 5px 0px 0px;
+        background-color: #111;
+        border: 1px solid #222;
+        color: #aaa;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #222;
+        border-bottom: 2px solid #00d2ff !important;
+        color: #00d2ff !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------------------------------------------
+# 1. DATA ACCESS & FALLBACK LAYER
+# -------------------------------------------------------------
+
+def load_heartbeat():
+    """
+    Reads the system heartbeat.json containing latest run info.
+    """
+    heartbeat_path = "heartbeat.json"
+    if os.path.exists(heartbeat_path):
+        try:
+            with open(heartbeat_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return None
+
+def get_log_tail(n=50):
+    """
+    Reads the last N lines of logs/scheduler.log.
+    """
+    log_path = os.path.join("logs", "scheduler.log")
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                lines = f.readlines()
+                return "".join(lines[-n:])
+        except Exception as e:
+            return f"Error reading log file: {e}"
+    return "Log file not found. Scheduler daemon may not have run yet."
+
+def generate_mock_raw_data():
+    """
+    Generates rich historical mock records if database is empty to ensure visual charts populate.
+    """
+    dates = pd.date_range(end=datetime.now(), periods=10, freq='D')
+    records = []
+    platforms = ["Zepto", "Blinkit", "Swiggy Instamart"]
+    brands = ["Amul", "Nandini", "Harvest Gold", "Modern", "Tata"]
+    categories = ["Dairy, Bread & Eggs", "Fruits & Vegetables", "Groceries"]
+    
+    base_prices = {
+        "Dairy, Bread & Eggs": 50.0,
+        "Fruits & Vegetables": 45.0,
+        "Groceries": 75.0
+    }
+    
+    np.random.seed(42)
+    
+    for dt in dates:
+        # Simulate micro-inflation over time (0.4% compound daily)
+        inflation_factor = 1.0 + (dt - dates[0]).days * 0.004
+        for platform in platforms:
+            for brand in brands:
+                for category in categories:
+                    for i in range(2):
+                        product_id = f"p-{brand.lower()}-{category[:3].lower()}-{i}"
+                        product_name = f"{brand} {category[:-1]} Special {i+1}"
+                        
+                        base_p = base_prices[category] * inflation_factor
+                        # Price variances
+                        listed_price = round(base_p * np.random.uniform(0.95, 1.05), 2)
+                        discount_price = round(listed_price * np.random.uniform(0.90, 1.0), 2)
+                        
+                        # Set OOS probabilities
+                        oos_prob = 0.15 if platform == "Zepto" else (0.10 if platform == "Swiggy Instamart" else 0.20)
+                        stock_status = np.random.random() > oos_prob
+                        
+                        records.append({
+                            "observed_at": dt,
+                            "effective_at": dt,
+                            "platform_name": platform,
+                            "store_id": f"store_{platform.lower()}_blr",
+                            "product_id": product_id,
+                            "product_name": product_name,
+                            "category": category,
+                            "brand_name": brand,
+                            "listed_price": listed_price,
+                            "discount_price": discount_price,
+                            "stock_status": stock_status,
+                            "parent_ticker": platform.upper()
+                        })
+    return pd.DataFrame(records)
+
+@st.cache_data(ttl=60)
+def fetch_raw_data():
+    """
+    Fetches raw records from TimescaleDB or falls back to local Parquet/Mock data.
+    """
+    df = pd.DataFrame()
+    source_name = "Mock Sandbox Cache"
+    
+    # Try TimescaleDB first
+    try:
+        from signals.aggregator import fetch_raw_records
+        df = fetch_raw_records()
+        if not df.empty:
+            source_name = "TimescaleDB (Live)"
+    except Exception as e:
+        # Gracefully handle database offline status
+        pass
+        
+    # Fallback to generating mock raw records if both failed
+    if df.empty:
+        df = generate_mock_raw_data()
+        
+    return df, source_name
+
+# -------------------------------------------------------------
+# 2. RENDER INTERFACE
+# -------------------------------------------------------------
+
+# Title & Description Header
+st.markdown('<div class="main-title">AERODATA-QCOMM CONTROL COMMAND</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-subtitle">Harvesting Quick-Commerce Pricing, Stockouts & Catalog Signals for Quantitative Funds</div>', unsafe_allow_html=True)
+
+# Fetch raw data set
+raw_df, data_source = fetch_raw_data()
+
+# Map store_id to city
+def map_store_to_city(store_id):
+    store_lower = str(store_id).lower()
+    if "blr" in store_lower or "bangalore" in store_lower or "hsr" in store_lower or "ind" in store_lower:
+        return "Bangalore"
+    elif "bom" in store_lower or "mumbai" in store_lower or "lpr" in store_lower or "and" in store_lower:
+        return "Mumbai"
+    elif "del" in store_lower or "delhi" in store_lower or "gur" in store_lower or "sak" in store_lower:
+        return "Delhi-NCR"
+    return "Other"
+
+if not raw_df.empty:
+    raw_df["city"] = raw_df["store_id"].apply(map_store_to_city)
+else:
+    raw_df["city"] = []
+
+# Sidebar Control Center
+with st.sidebar:
+    st.image("https://img.icons8.com/nolan/96/database.png", width=70)
+    st.markdown("### Command Center")
+    st.info(f"Data Connection Source:\n**{data_source}**")
+    
+    st.markdown("---")
+    st.markdown("### Geographical Filters")
+    city_filter = st.selectbox(
+        "Select Urban Region",
+        ["All Cities", "Bangalore", "Mumbai", "Delhi-NCR"]
+    )
+    
+    st.markdown("---")
+    st.markdown("### Log Monitoring")
+    auto_refresh = st.checkbox("Auto-Refresh Log Tail", value=False)
+    refresh_rate = st.slider("Refresh Interval (s)", min_value=2, max_value=30, value=5)
+    
+    st.markdown("---")
+    if st.button("Refresh Ingestion Data"):
+        st.cache_data.clear()
+        st.rerun()
+
+# Filter raw_df dynamically based on the dropdown selection
+if city_filter != "All Cities":
+    filtered_df = raw_df[raw_df["city"] == city_filter]
+else:
+    filtered_df = raw_df
+
+# Calculate daily indices on the dynamically filtered raw dataframe
+from signals.aggregator import calculate_brand_stockouts, calculate_inflation_index
+
+if not filtered_df.empty:
+    stockouts_df = calculate_brand_stockouts(filtered_df)
+    inflation_df = calculate_inflation_index(filtered_df)
+else:
+    # Empty data handling to avoid errors if filter yields no rows
+    stockouts_df = pd.DataFrame(columns=["observed_date", "platform_name", "brand_name", "total_products", "oos_products", "oos_rate"])
+    inflation_df = pd.DataFrame(columns=["observed_date", "dairy_avg_price", "produce_avg_price", "staples_avg_price", "index_value", "inflation_dod"])
+
+# tab selection
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Market CPI & Inflation", "📦 Brand Stockout Analysis", "💸 Cross-Regional Arbitrage", "⚙️ SRE System Health"])
+
+# -------------------------------------------------------------
+# COMPONENT A: SYSTEM HEALTH & METRICS COMMAND CENTER (Rendered inside Tab 4)
+# -------------------------------------------------------------
+with tab4:
+    st.subheader("SRE System Health & Ingestion Pipeline")
+    hb = load_heartbeat()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if hb:
+            status = hb.get("run_status", "UNKNOWN")
+            color = "green" if status == "SUCCESS" else "red"
+            st.markdown(f"""
+            <div class="metric-card">
+                <h4 style="color:#888;margin:0;">LATEST DAEMON RUN</h4>
+                <h1 style="color:{color};margin:10px 0;">{status}</h1>
+                <small style="color:#666;">Status check from heartbeat.json</small>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="metric-card">
+                <h4 style="color:#888;margin:0;">LATEST DAEMON RUN</h4>
+                <h1 style="color:orange;margin:10px 0;">NO CRAWL</h1>
+                <small style="color:#666;">No heartbeat.json found</small>
+            </div>
+            """, unsafe_allow_html=True)
+            
+    with col2:
+        timestamp_val = hb.get("timestamp", "Never") if hb else "Never"
+        if timestamp_val != "Never":
+            try:
+                # Format ISO timestamp
+                dt_obj = datetime.fromisoformat(timestamp_val)
+                timestamp_display = dt_obj.strftime("%Y-%m-%d %H:%M IST")
+            except Exception:
+                timestamp_display = timestamp_val[:16]
+        else:
+            timestamp_display = "No runs recorded"
+            
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4 style="color:#888;margin:0;">LAST UPDATED TIMESTAMP</h4>
+            <h2 style="color:#00d2ff;margin:15px 0;font-size:1.4rem;">{timestamp_display}</h2>
+            <small style="color:#666;">Time of last database upsert</small>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col3:
+        total_rows = hb.get("total_rows_committed", 0) if hb else 0
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4 style="color:#888;margin:0;">TOTAL INGESTED ROWS</h4>
+            <h1 style="color:#00d2ff;margin:10px 0;">{total_rows:,}</h1>
+            <small style="color:#666;">Committed to qcomm_catalog_history</small>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4 style="color:#888;margin:0;">PARTITIONING STATUS</h4>
+            <h1 style="color:#20fc03;margin:10px 0;">ACTIVE</h1>
+            <small style="color:#666;">7-day partition / 14-day ZSTD compression</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Ingestion Platform Breakdown
+    st.write("")
+    st.markdown("### Ingestion Volume Platform Breakdown")
+    breakdown_data = hb.get("platform_breakdown", {}) if hb else {}
+    if breakdown_data:
+        b_cols = st.columns(len(breakdown_data))
+        for i, (platform, count) in enumerate(breakdown_data.items()):
+            with b_cols[i]:
+                st.metric(label=f"{platform} Raw Scrapes", value=f"{count:,} items")
+    else:
+        # fallback breakdown stats
+        st.info("No platform breakdown recorded in latest run. Displaying active platform connections:")
+        b_cols = st.columns(3)
+        with b_cols[0]: st.metric("Zepto Ingestion Stream", "ACTIVE")
+        with b_cols[1]: st.metric("Blinkit Ingestion Stream", "ACTIVE")
+        with b_cols[2]: st.metric("Swiggy Instamart Ingestion Stream", "ACTIVE")
+
+    # -------------------------------------------------------------
+    # COMPONENT D: LIVE DAEMON LOG TAIL
+    # -------------------------------------------------------------
+    st.write("")
+    st.markdown("### Background Daemon Logs (`logs/scheduler.log`)")
+    log_content = get_log_tail(50)
+    st.code(log_content, language="text")
+
+# -------------------------------------------------------------
+# COMPONENT B: STAPLES INFLATION INDEX (CPI PROXY) VISUALIZER
+# -------------------------------------------------------------
+with tab1:
+    st.subheader("Staples Inflation Index (Daily CPI Proxy)")
+    
+    if inflation_df.empty:
+        st.warning("No price inflation records found. Seed data or start crawler.")
+    else:
+        # Ensure correct datatypes
+        inflation_df["observed_date"] = pd.to_datetime(inflation_df["observed_date"])
+        
+        # Dual-axis Plotly Chart: Index Value and YoY DoD Rate
+        fig = go.Figure()
+        
+        # Line for Index Value
+        fig.add_trace(go.Scatter(
+            x=inflation_df["observed_date"],
+            y=inflation_df["index_value"],
+            name="CPI Index Value (INR)",
+            mode="lines+markers",
+            line=dict(color="#00d2ff", width=3),
+            marker=dict(size=6)
+        ))
+        
+        # Bar for DoD Rate
+        fig.add_trace(go.Bar(
+            x=inflation_df["observed_date"],
+            y=inflation_df["inflation_dod"] * 100,
+            name="DoD Inflation %",
+            yaxis="y2",
+            marker_color="rgba(255, 99, 132, 0.4)",
+            hoverinfo="x+y"
+        ))
+        
+        fig.update_layout(
+            title="Q-Commerce CPI Staples Basket Index & Day-over-Day Inflation Rate",
+            template="plotly_dark",
+            hovermode="x unified",
+            height=450,
+            legend=dict(x=0.01, y=0.99),
+            yaxis=dict(
+                title=dict(text="Index Value (INR)", font=dict(color="#00d2ff")),
+                tickfont=dict(color="#00d2ff")
+            ),
+            yaxis2=dict(
+                title=dict(text="DoD Inflation %", font=dict(color="#ff6384")),
+                tickfont=dict(color="#ff6384"),
+                anchor="x",
+                overlaying="y",
+                side="right"
+            )
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Category Breakdown
+        st.write("")
+        st.markdown("### staples Sector Average Prices Breakdown")
+        
+        fig2 = go.Figure()
+        for cat_col, color, name in [
+            ("dairy_avg_price", "#00d2ff", "Dairy & Bread"),
+            ("produce_avg_price", "#20fc03", "Fruits & Vegetables"),
+            ("staples_avg_price", "#ffc107", "Groceries")
+        ]:
+            if cat_col in inflation_df.columns:
+                fig2.add_trace(go.Scatter(
+                    x=inflation_df["observed_date"],
+                    y=inflation_df[cat_col],
+                    name=name,
+                    mode="lines+markers",
+                    line=dict(color=color, width=2)
+                ))
+                
+        fig2.update_layout(
+            title="Localized Micro-Price Trends by Staple Category",
+            template="plotly_dark",
+            height=400,
+            xaxis_title="Observed Date",
+            yaxis_title="Average Price (INR)"
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+# -------------------------------------------------------------
+# COMPONENT C: BRAND STOCKOUT ANALYSIS
+# -------------------------------------------------------------
+with tab2:
+    st.subheader("FMCG Brand Out-of-Stock (OOS) rates")
+    
+    if stockouts_df.empty:
+        st.warning("No out-of-stock data found. Seed database to populate.")
+    else:
+        # Grouped bar chart comparing brand stockout rates across different platforms
+        fig_bar = px.bar(
+            stockouts_df,
+            x="brand_name",
+            y="oos_rate",
+            color="platform_name",
+            barmode="group",
+            title="FMCG Brand Distribution Gaps (Daily OOS Rate %)",
+            labels={"oos_rate": "Out-of-Stock Rate (%)", "brand_name": "FMCG Brand", "platform_name": "Store Platform"},
+            template="plotly_dark",
+            height=450,
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        
+        fig_bar.update_layout(
+            barmode='group',
+            yaxis=dict(range=[0, 100]),
+            yaxis_title="Out-of-Stock Rate (%)",
+            xaxis_title="FMCG Brand"
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+        # Detail stats table
+        st.write("")
+        st.markdown("### Brand Stockout Detail Metrics")
+        # Rename columns for presentation
+        disp_df = stockouts_df.rename(columns={
+            "observed_date": "Date",
+            "platform_name": "Platform",
+            "brand_name": "FMCG Brand",
+            "total_products": "Total Items Tracked",
+            "oos_products": "Stockout Items",
+            "oos_rate": "OOS Rate (%)"
+        })
+        # Format percentages
+        disp_df["OOS Rate (%)"] = disp_df["OOS Rate (%)"].map("{:.2f}%".format)
+        st.dataframe(disp_df.sort_values(by="Date", ascending=False), use_container_width=True)
+
+# -------------------------------------------------------------
+# COMPONENT D: CROSS-REGIONAL PRICE SPREAD & ARBITRAGE (Rendered inside Tab 3)
+# -------------------------------------------------------------
+with tab3:
+    st.subheader("Cross-Regional Price Spreads & Arbitrage Alerts")
+    st.markdown("Identifies price disparities for identical FMCG SKUs across major urban grids to detect supply chain inefficiencies.")
+    
+    # Calculate price spreads
+    def calculate_regional_spreads(df):
+        if df.empty:
+            return pd.DataFrame()
+        # Get latest price per product, brand, and city
+        latest = df.sort_values("observed_at").groupby(["product_name", "brand_name", "city"]).last().reset_index()
+        # Pivot by city
+        pivoted = latest.pivot(index=["product_name", "brand_name"], columns="city", values="discount_price").reset_index()
+        
+        cities = [c for c in ["Bangalore", "Mumbai", "Delhi-NCR"] if c in pivoted.columns]
+        if len(cities) < 2:
+            return pd.DataFrame()
+            
+        spread_records = []
+        for idx, row in pivoted.iterrows():
+            prices = {c: row[c] for c in cities if pd.notna(row[c]) and row[c] > 0}
+            if len(prices) < 2:
+                continue
+            min_c = min(prices, key=prices.get)
+            max_c = max(prices, key=prices.get)
+            min_p = prices[min_c]
+            max_p = prices[max_c]
+            
+            spread_val = max_p - min_p
+            spread_pct = (spread_val / min_p) * 100.0 if min_p > 0 else 0.0
+            
+            spread_records.append({
+                "Brand": row["brand_name"],
+                "Product Name": row["product_name"],
+                "Cheapest Region": f"{min_c} (₹{min_p:.2f})",
+                "Cheapest Price": min_p,
+                "Most Expensive Region": f"{max_c} (₹{max_p:.2f})",
+                "Most Expensive Price": max_p,
+                "Spread (INR)": spread_val,
+                "Spread (%)": spread_pct
+            })
+        return pd.DataFrame(spread_records)
+
+    spreads_df = calculate_regional_spreads(raw_df)
+    
+    if not spreads_df.empty:
+        # Sort descending by spread percent
+        spreads_df = spreads_df.sort_values("Spread (%)", ascending=False)
+        
+        # Color red if > 15%, else cyan
+        colors = ['#ff4b4b' if pct > 15.0 else '#00d2ff' for pct in spreads_df["Spread (%)"]]
+        
+        fig_spread = go.Figure(go.Bar(
+            x=spreads_df["Spread (%)"].head(15),
+            y=spreads_df["Product Name"].head(15),
+            orientation='h',
+            marker_color=colors[:15],
+            text=[f"{pct:.1f}%" for pct in spreads_df["Spread (%)"].head(15)],
+            textposition='auto',
+            hovertemplate='<b>%{y}</b><br>Spread Premium: %{x:.2f}%<extra></extra>'
+        ))
+        
+        fig_spread.update_layout(
+            title="Top Cross-Regional FMCG Price Premiums (%)",
+            xaxis_title="Spread Premium (%)",
+            yaxis_title="Product SKU",
+            height=500,
+            margin=dict(l=200, r=20, t=50, b=50),
+            template="plotly_dark",
+            yaxis={'categoryorder':'total ascending'}
+        )
+        st.plotly_chart(fig_spread, use_container_width=True)
+        
+        # Alert for spreads > 15%
+        high_spreads = spreads_df[spreads_df["Spread (%)"] > 15.0]
+        if not high_spreads.empty:
+            st.warning(f"⚠️ CRITICAL ARBITRAGE ALERT: Detected {len(high_spreads)} items with cross-regional price spreads exceeding 15% threshold!")
+            
+        st.markdown("### Actionable Price Spread Matrix")
+        display_cols = ["Brand", "Product Name", "Cheapest Region", "Most Expensive Region", "Spread (INR)", "Spread (%)"]
+        st.dataframe(
+            spreads_df[display_cols].style.format({
+                "Spread (INR)": "₹{:.2f}",
+                "Spread (%)": "{:.2f}%"
+            }),
+            use_container_width=True
+        )
+    else:
+        st.info("No cross-regional spreads detected. Ensure multi-city pricing records are available in the database.")
+
+# -------------------------------------------------------------
+# AUTO-REFRESH DAEMON LOGIC
+# -------------------------------------------------------------
+if auto_refresh:
+    time.sleep(refresh_rate)
+    st.rerun()

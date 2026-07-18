@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # Service A: TimescaleDB Hypertable database
+  db:
+    image: timescale/timescaledb:latest-pg15
+    container_name: qcomm-timescaledb-srv
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=your_secure_password
+      - POSTGRES_DB=postgres
+    volumes:
+      - qcomm-db-data:/var/lib/postgresql/data
+
+  # Service B: Background scheduler daemon
+  scheduler:
+    build: .
+    container_name: qcomm-scheduler-srv
+    restart: always
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=your_secure_password
+      - DB_NAME=postgres
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_USER=${PROXY_USER:-}
+      - PROXY_PASS=${PROXY_PASS:-}
+      - NOTIFICATION_PROVIDER=${NOTIFICATION_PROVIDER:-none}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./s3_delivery_simulation:/app/s3_delivery_simulation
+      - ./logs:/app/logs
+      - ./heartbeat.json:/app/heartbeat.json
+    command: python scheduler.py
+
+  # Service C: Streamlit Analytics Dashboard
+  dashboard:
+    build: .
+    container_name: qcomm-dashboard-srv
+    restart: always
+    ports:
+      - "8501:8501"
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=your_secure_password
+      - DB_NAME=postgres
+      - PROXY_URL=${PROXY_URL:-}
+      - PROXY_USER=${PROXY_USER:-}
+      - PROXY_PASS=${PROXY_PASS:-}
+    volumes:
+      - ./s3_delivery_simulation:/app/s3_delivery_simulation
+      - ./heartbeat.json:/app/heartbeat.json
+    command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+
+volumes:
+  qcomm-db-data:
+    driver: local
