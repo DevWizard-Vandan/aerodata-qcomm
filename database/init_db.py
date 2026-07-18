@@ -1,12 +1,27 @@
 import psycopg2
 import sys
+import os
 import logging
+
+# Add project root to PYTHONPATH dynamically
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 def get_connection():
+    """
+    Establishes connection to the target PostgreSQL database.
+    Supports serverless environments via DATABASE_URL or defaults to config parameters.
+    """
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        return psycopg2.connect(db_url)
+    
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -18,13 +33,18 @@ def get_connection():
 def initialize_database():
     conn = None
     try:
-        logger.info(f"Connecting to database {DB_NAME} at {DB_HOST}:{DB_PORT}...")
+        db_url = os.environ.get("DATABASE_URL")
+        if db_url:
+            logger.info("Connecting to database using DATABASE_URL link...")
+        else:
+            logger.info(f"Connecting to database {DB_NAME} at {DB_HOST}:{DB_PORT}...")
+            
         conn = get_connection()
         conn.autocommit = True
         with conn.cursor() as cur:
-            # 1. Create table
+            # 1. Create main qcomm_catalog_history table
             logger.info("Creating table qcomm_catalog_history...")
-            create_table_query = """
+            create_history_query = """
             CREATE TABLE IF NOT EXISTS qcomm_catalog_history (
                 observed_at TIMESTAMPTZ NOT NULL,
                 effective_at TIMESTAMPTZ NOT NULL,
@@ -41,57 +61,85 @@ def initialize_database():
                 PRIMARY KEY (observed_at, platform_name, store_id, product_id)
             );
             """
-            cur.execute(create_table_query)
+            cur.execute(create_history_query)
 
-            # 2. Check if already a hypertable
-            cur.execute("""
-                SELECT 1 FROM _timescaledb_catalog.hypertable 
-                WHERE table_name = 'qcomm_catalog_history';
-            """)
-            is_hypertable = cur.fetchone()
+            # 2. Create qcomm_prices table for Neon high-speed indexed lookups
+            logger.info("Creating table qcomm_prices...")
+            create_prices_query = """
+            CREATE TABLE IF NOT EXISTS qcomm_prices (
+                timestamp TIMESTAMPTZ NOT NULL,
+                store_id VARCHAR(100) NOT NULL,
+                parent_ticker VARCHAR(50),
+                platform_name VARCHAR(100) NOT NULL,
+                product_id VARCHAR(100) NOT NULL,
+                product_name TEXT NOT NULL,
+                listed_price NUMERIC(10, 2),
+                discount_price NUMERIC(10, 2),
+                PRIMARY KEY (timestamp, platform_name, store_id, product_id)
+            );
+            """
+            cur.execute(create_prices_query)
 
-            if not is_hypertable:
-                logger.info("Converting qcomm_catalog_history to hypertable...")
-                cur.execute("""
-                    SELECT create_hypertable(
-                        'qcomm_catalog_history', 
-                        'observed_at', 
-                        chunk_time_interval => INTERVAL '7 days'
-                    );
-                """)
-                logger.info("Hypertable created successfully.")
-            else:
-                logger.info("qcomm_catalog_history is already a hypertable.")
+            # 3. Create the compound lookup index on qcomm_prices
+            logger.info("Creating index idx_metrics_lookup...")
+            create_index_query = """
+            CREATE INDEX IF NOT EXISTS idx_metrics_lookup 
+            ON qcomm_prices (timestamp DESC, store_id, parent_ticker);
+            """
+            cur.execute(create_index_query)
 
-            # 3. Enable compression
-            logger.info("Enabling columnar compression on hypertable...")
-            try:
-                cur.execute("""
-                    ALTER TABLE qcomm_catalog_history SET (
-                        timescaledb.compress,
-                        timescaledb.compress_segmentby = 'platform_name, product_id, store_id'
-                    );
-                """)
-                logger.info("Compression settings enabled.")
-            except psycopg2.Error as e:
-                # If compression is already enabled, it might raise an exception or notice, handle it
-                logger.info(f"Note on enabling compression: {e}")
+            # 4. Build database synchronization trigger functions
+            logger.info("Creating synchronization trigger function and trigger...")
+            create_function_query = """
+            CREATE OR REPLACE FUNCTION sync_to_qcomm_prices()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                INSERT INTO qcomm_prices (
+                    timestamp, store_id, parent_ticker, platform_name, 
+                    product_id, product_name, listed_price, discount_price
+                )
+                VALUES (
+                    NEW.observed_at, NEW.store_id, NEW.parent_ticker, NEW.platform_name, 
+                    NEW.product_id, NEW.product_name, NEW.listed_price, NEW.discount_price
+                )
+                ON CONFLICT (timestamp, platform_name, store_id, product_id)
+                DO UPDATE SET
+                    parent_ticker = EXCLUDED.parent_ticker,
+                    product_name = EXCLUDED.product_name,
+                    listed_price = EXCLUDED.listed_price,
+                    discount_price = EXCLUDED.discount_price;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """
+            cur.execute(create_function_query)
 
-            # 4. Add compression policy
-            logger.info("Adding compression policy for chunks older than 14 days...")
-            try:
-                cur.execute("""
-                    SELECT add_compression_policy(
-                        'qcomm_catalog_history', 
-                        INTERVAL '14 days',
-                        if_not_exists => true
-                    );
-                """)
-                logger.info("Compression policy set up successfully.")
-            except psycopg2.Error as e:
-                logger.info(f"Note on compression policy: {e}")
+            # Drop trigger if exists and create it fresh to ensure idempotency
+            cur.execute("DROP TRIGGER IF EXISTS trg_sync_prices ON qcomm_catalog_history;")
+            create_trigger_query = """
+            CREATE TRIGGER trg_sync_prices
+            AFTER INSERT OR UPDATE ON qcomm_catalog_history
+            FOR EACH ROW
+            EXECUTE FUNCTION sync_to_qcomm_prices();
+            """
+            cur.execute(create_trigger_query)
 
-        logger.info("Database infrastructure initialized successfully.")
+            # 5. Back-populate existing catalog history into qcomm_prices table
+            logger.info("Back-populating historical records from qcomm_catalog_history into qcomm_prices...")
+            backpopulate_query = """
+            INSERT INTO qcomm_prices (
+                timestamp, store_id, parent_ticker, platform_name, 
+                product_id, product_name, listed_price, discount_price
+            )
+            SELECT 
+                observed_at, store_id, parent_ticker, platform_name, 
+                product_id, product_name, listed_price, discount_price
+            FROM qcomm_catalog_history
+            ON CONFLICT (timestamp, platform_name, store_id, product_id) DO NOTHING;
+            """
+            cur.execute(backpopulate_query)
+
+        logger.info("Database infrastructure initialized successfully for Neon.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         sys.exit(1)
