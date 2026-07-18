@@ -16,6 +16,10 @@ class AlertNotifier:
         self.discord_url = os.environ.get("DISCORD_WEBHOOK_URL")
         self.telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
         self.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        self.telegram_custom_gateway = os.environ.get("TELEGRAM_CUSTOM_GATEWAY", "").strip()
+        
+        if self.telegram_custom_gateway:
+            logger.info("Telemetry Engine loaded. Routing channel configured through custom gateway proxy layout.")
 
     def send_alert(self, error_message, traceback_snippet=None):
         """
@@ -89,7 +93,11 @@ class AlertNotifier:
                 trace_str = trace_str[:980] + "\n...[TRUNCATED]"
             text += f"\n\n*Traceback:*\n`{trace_str}`"
 
-        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        base_url = "https://api.telegram.org"
+        if self.telegram_custom_gateway:
+            base_url = self.telegram_custom_gateway.rstrip('/')
+            
+        url = f"{base_url}/bot{self.telegram_token}/sendMessage"
         payload = {
             "chat_id": self.telegram_chat_id,
             "text": text,
