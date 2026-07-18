@@ -149,25 +149,66 @@ def generate_mock_raw_data():
                         })
     return pd.DataFrame(records)
 
-@st.cache_data(ttl=60)
+from sqlalchemy import create_engine
+
+@st.cache_data(ttl=300)
 def fetch_raw_data():
     """
-    Fetches raw records from TimescaleDB or falls back to local Parquet/Mock data.
+    Fetches raw product records directly from Neon Serverless Postgres table qcomm_prices.
     """
+    # 1. Resolve connection URL (st.secrets["DATABASE_URL"] -> env -> fallback to local db params)
+    db_url = None
+    try:
+        if "DATABASE_URL" in st.secrets:
+            db_url = st.secrets["DATABASE_URL"]
+    except Exception:
+        pass
+        
+    if not db_url:
+        db_url = os.getenv("DATABASE_URL")
+        
+    if not db_url:
+        from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+        db_url = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
     df = pd.DataFrame()
     source_name = "Mock Sandbox Cache"
     
-    # Try TimescaleDB first
+    # 2. Try querying Neon Serverless Postgres via SQLAlchemy connection pool
     try:
-        from signals.aggregator import fetch_raw_records
-        df = fetch_raw_records()
+        engine = create_engine(
+            db_url,
+            pool_size=5,
+            max_overflow=10
+        )
+        
+        # Primary SQL fetch statement from qcomm_prices ordering by timestamp DESC
+        query = """
+            SELECT 
+                timestamp AS observed_at, 
+                platform_name, 
+                store_id, 
+                product_id, 
+                product_name, 
+                listed_price, 
+                discount_price, 
+                category, 
+                brand_name, 
+                stock_status, 
+                parent_ticker
+            FROM qcomm_prices
+            ORDER BY timestamp DESC;
+        """
+        with engine.connect() as conn:
+            df = pd.read_sql_query(query, conn)
+            
         if not df.empty:
-            source_name = "TimescaleDB (Live)"
+            source_name = "Neon Serverless Postgres"
     except Exception as e:
         # Gracefully handle database offline status
         pass
-        
-    # Fallback to generating mock raw records if both failed
+
+    # 3. Fallback to generating mock raw records if database query yielded nothing
     if df.empty:
         df = generate_mock_raw_data()
         

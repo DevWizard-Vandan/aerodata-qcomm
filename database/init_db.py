@@ -75,6 +75,9 @@ def initialize_database():
                 product_name TEXT NOT NULL,
                 listed_price NUMERIC(10, 2),
                 discount_price NUMERIC(10, 2),
+                category TEXT,
+                brand_name TEXT,
+                stock_status BOOLEAN NOT NULL DEFAULT TRUE,
                 PRIMARY KEY (timestamp, platform_name, store_id, product_id)
             );
             """
@@ -96,18 +99,23 @@ def initialize_database():
             BEGIN
                 INSERT INTO qcomm_prices (
                     timestamp, store_id, parent_ticker, platform_name, 
-                    product_id, product_name, listed_price, discount_price
+                    product_id, product_name, listed_price, discount_price,
+                    category, brand_name, stock_status
                 )
                 VALUES (
                     NEW.observed_at, NEW.store_id, NEW.parent_ticker, NEW.platform_name, 
-                    NEW.product_id, NEW.product_name, NEW.listed_price, NEW.discount_price
+                    NEW.product_id, NEW.product_name, NEW.listed_price, NEW.discount_price,
+                    NEW.category, NEW.brand_name, NEW.stock_status
                 )
                 ON CONFLICT (timestamp, platform_name, store_id, product_id)
                 DO UPDATE SET
                     parent_ticker = EXCLUDED.parent_ticker,
                     product_name = EXCLUDED.product_name,
                     listed_price = EXCLUDED.listed_price,
-                    discount_price = EXCLUDED.discount_price;
+                    discount_price = EXCLUDED.discount_price,
+                    category = EXCLUDED.category,
+                    brand_name = EXCLUDED.brand_name,
+                    stock_status = EXCLUDED.stock_status;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql;
@@ -129,11 +137,13 @@ def initialize_database():
             backpopulate_query = """
             INSERT INTO qcomm_prices (
                 timestamp, store_id, parent_ticker, platform_name, 
-                product_id, product_name, listed_price, discount_price
+                product_id, product_name, listed_price, discount_price,
+                category, brand_name, stock_status
             )
             SELECT 
                 observed_at, store_id, parent_ticker, platform_name, 
-                product_id, product_name, listed_price, discount_price
+                product_id, product_name, listed_price, discount_price,
+                category, brand_name, stock_status
             FROM qcomm_catalog_history
             ON CONFLICT (timestamp, platform_name, store_id, product_id) DO NOTHING;
             """
