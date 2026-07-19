@@ -409,12 +409,18 @@ else:
     inflation_df = pd.DataFrame(columns=["observed_date", "dairy_avg_price", "produce_avg_price", "staples_avg_price", "index_value", "inflation_dod"])
 
 # tab selection
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Market CPI & Inflation", "📦 Brand Stockout Analysis", "💸 Cross-Regional Arbitrage", "⚙️ SRE System Health"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Market CPI & Inflation", 
+    "📦 Brand Stockout Analysis", 
+    "💸 Cross-Regional Arbitrage", 
+    "📈 Alpha Signals & Macro Insights", 
+    "⚙️ SRE System Health"
+])
 
 # -------------------------------------------------------------
-# COMPONENT A: SYSTEM HEALTH & METRICS COMMAND CENTER (Rendered inside Tab 4)
+# COMPONENT A: SYSTEM HEALTH & METRICS COMMAND CENTER (Rendered inside Tab 5)
 # -------------------------------------------------------------
-with tab4:
+with tab5:
     st.subheader("SRE System Health & Ingestion Pipeline")
     hb = load_heartbeat()
     
@@ -725,6 +731,94 @@ with tab3:
         )
     else:
         st.info("No cross-regional spreads detected. Ensure multi-city pricing records are available in the database.")
+
+# -------------------------------------------------------------
+# COMPONENT E: ALPHA SIGNALS & MACRO INSIGHTS VISUALIZER (Tab 4)
+# -------------------------------------------------------------
+with tab4:
+    st.subheader("Micro-Price Index Drift (\Delta CPI) Alpha Engine")
+    st.markdown("Annualized price index momentum and 7-day rolling volatility filters computed dynamically from federated data pool.")
+    
+    # 1. Compute alpha signal
+    from signals.alpha_engine import calculate_staples_index
+    alpha_df = calculate_staples_index(filtered_df)
+    
+    if not alpha_df.empty:
+        from plotly.subplots import make_subplots
+        
+        # Create subplots for dual-axis charting
+        fig_alpha = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # Line for baseline Staples Index Value
+        fig_alpha.add_trace(
+            go.Scatter(
+                x=alpha_df["observed_date"],
+                y=alpha_df["index_value"],
+                name="Staples Index Value (INR)",
+                mode="lines+markers",
+                line=dict(color="#00d2ff", width=3)
+            ),
+            secondary_y=False
+        )
+        
+        # Bar for DoD Drift Velocity (\Delta CPI %)
+        fig_alpha.add_trace(
+            go.Bar(
+                x=alpha_df["observed_date"],
+                y=alpha_df["drift_dod"] * 100.0,
+                name="Drift Velocity (\Delta CPI %)",
+                marker_color="rgba(230, 126, 34, 0.5)",
+                hoverinfo="x+y"
+            ),
+            secondary_y=True
+        )
+        
+        fig_alpha.update_layout(
+            title="Staples Index Value & Micro-Price Index Drift (\Delta CPI %)",
+            template="plotly_dark",
+            hovermode="x unified",
+            height=450,
+            legend=dict(x=0.01, y=0.99),
+            yaxis=dict(
+                title=dict(text="Staples Index (INR)", font=dict(color="#00d2ff")),
+                tickfont=dict(color="#00d2ff")
+            ),
+            yaxis2=dict(
+                title=dict(text="Drift Velocity (\Delta CPI %)", font=dict(color="#e67e22")),
+                tickfont=dict(color="#e67e22"),
+                anchor="x",
+                overlaying="y",
+                side="right"
+            )
+        )
+        st.plotly_chart(fig_alpha, use_container_width=True)
+        
+        # Highlight metrics cards and details
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.markdown("#### Drift & Volatility Highlights")
+            latest_row = alpha_df.iloc[-1]
+            st.metric(
+                label="Latest Staples Index Value",
+                value=f"INR {latest_row['index_value']:.2f}"
+            )
+            st.metric(
+                label="Latest DoD Price Drift (\Delta CPI)",
+                value=f"{latest_row['drift_dod']*100:.4f}%"
+            )
+            st.metric(
+                label="7-Day Rolling Volatility Threshold",
+                value=f"{latest_row['volatility_7d']*100:.4f}%"
+            )
+            
+        with col_m2:
+            st.markdown("#### Signal Output Log")
+            st.dataframe(
+                alpha_df[["observed_date", "index_value", "drift_dod", "volatility_7d"]].sort_values("observed_date", ascending=False),
+                use_container_width=True
+            )
+    else:
+        st.info("No data available to calculate Staples Index. Stream new records to activate signal telemetry.")
 
 # -------------------------------------------------------------
 # AUTO-REFRESH DAEMON LOGIC
