@@ -9,6 +9,7 @@ if project_root not in sys.path:
 import json
 import time
 import logging
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
@@ -203,14 +204,52 @@ def generate_mock_raw_data():
                         })
     return pd.DataFrame(records)
 
+import io
+import requests
 from sqlalchemy import create_engine
+
+def federate_datasets(hot_df, cold_df):
+    """
+    Concatenates hot and cold tier DataFrames, renaming 'timestamp' to 'observed_at'
+    if necessary, and drops duplicates across composite indices.
+    """
+    if hot_df.empty and cold_df.empty:
+        return pd.DataFrame()
+        
+    # Standardize columns
+    if not hot_df.empty and "timestamp" in hot_df.columns:
+        hot_df = hot_df.rename(columns={"timestamp": "observed_at"})
+    if not cold_df.empty and "timestamp" in cold_df.columns:
+        cold_df = cold_df.rename(columns={"timestamp": "observed_at"})
+        
+    combined = pd.concat([hot_df, cold_df], ignore_index=True)
+    
+    # Ensure both timestamp and observed_at are present for deduplication compatibility
+    if "observed_at" in combined.columns:
+        combined["timestamp"] = combined["observed_at"]
+    elif "timestamp" in combined.columns:
+        combined["observed_at"] = combined["timestamp"]
+        
+    # Deduplicate across ["timestamp", "platform_name", "store_id", "product_id"]
+    combined = combined.drop_duplicates(subset=["timestamp", "platform_name", "store_id", "product_id"])
+    
+    # Sort by timestamp/observed_at DESC
+    sort_col = "observed_at" if "observed_at" in combined.columns else "timestamp"
+    combined = combined.sort_values(sort_col, ascending=False)
+    
+    return combined
 
 @st.cache_data(ttl=300)
 def fetch_raw_data():
     """
-    Fetches raw product records directly from Neon Serverless Postgres table qcomm_prices.
+    Fetches raw product records dynamically via hybrid data federation:
+    - Hot tier: Neon Serverless Postgres for the last 30 days
+    - Cold tier: Hugging Face dataset vault for older records
     """
-    # 1. Resolve connection URL (st.secrets["DATABASE_URL"] -> env -> fallback to local db params)
+    hot_df = pd.DataFrame()
+    cold_df = pd.DataFrame()
+    
+    # 1. Fetch from Hot Tier: Neon Serverless Postgres (timestamp >= NOW() - INTERVAL '30 days')
     db_url = None
     try:
         if "DATABASE_URL" in st.secrets:
@@ -225,18 +264,13 @@ def fetch_raw_data():
         from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
         db_url = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-    df = pd.DataFrame()
-    source_name = "Mock Sandbox Cache"
-    
-    # 2. Try querying Neon Serverless Postgres via SQLAlchemy connection pool
     try:
         engine = create_engine(
             db_url,
             pool_size=5,
             max_overflow=10
         )
-        
-        # Primary SQL fetch statement from qcomm_prices ordering by timestamp DESC
+        # Select records where timestamp >= NOW() - INTERVAL '30 days'
         query = """
             SELECT 
                 timestamp AS observed_at, 
@@ -251,18 +285,54 @@ def fetch_raw_data():
                 stock_status, 
                 parent_ticker
             FROM qcomm_prices
+            WHERE timestamp >= NOW() - INTERVAL '30 days'
             ORDER BY timestamp DESC;
         """
         with engine.connect() as conn:
-            df = pd.read_sql_query(query, conn)
-            
-        if not df.empty:
-            source_name = "Neon Serverless Postgres"
+            hot_df = pd.read_sql_query(query, conn)
     except Exception as e:
-        # Gracefully handle database offline status
-        pass
+        logger.warning(f"Failed to query Hot Tier: {e}")
 
-    # 3. Fallback to generating mock raw records if database query yielded nothing
+    # 2. Fetch from Cold Tier: Hugging Face dataset archive
+    hf_url = "https://huggingface.co/datasets/VaNam65/qcomm-cold-archive/resolve/main/data/archive_cold_tier.parquet"
+    hf_token = None
+    try:
+        if "HF_TOKEN" in st.secrets:
+            hf_token = st.secrets["HF_TOKEN"]
+    except Exception:
+        pass
+        
+    if not hf_token:
+        hf_token = os.getenv("HF_TOKEN")
+
+    headers = {}
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
+
+    try:
+        response = requests.get(hf_url, headers=headers, timeout=15)
+        if response.status_code == 200:
+            cold_df = pd.read_parquet(io.BytesIO(response.content))
+            logger.info("Successfully fetched Cold Tier from Hugging Face Parquet dataset.")
+        else:
+            logger.warning(f"Hugging Face Parquet fetch failed with status: {response.status_code}")
+    except Exception as e:
+        logger.warning(f"Error fetching Cold Tier from Hugging Face: {e}")
+
+    # 3. Unify and Deduplicate
+    df = pd.DataFrame()
+    source_name = "Mock Sandbox Cache"
+
+    if not hot_df.empty or not cold_df.empty:
+        df = federate_datasets(hot_df, cold_df)
+        if not hot_df.empty and not cold_df.empty:
+            source_name = "Federated (Neon Hot + Hugging Face Cold)"
+        elif not hot_df.empty:
+            source_name = "Neon Serverless Postgres (Hot Only)"
+        else:
+            source_name = "Hugging Face Parquet (Cold Only)"
+
+    # 4. Fallback to generating mock raw records if both tiers are empty
     if df.empty:
         df = generate_mock_raw_data()
         
@@ -299,7 +369,10 @@ else:
 with st.sidebar:
     st.image("https://img.icons8.com/nolan/96/database.png", width=70)
     st.markdown("### Command Center")
-    st.info(f"Data Connection Source:\n**{data_source}**")
+    if "Federated" in data_source:
+        st.info(f"Data Source:\n**{data_source}**")
+    else:
+        st.info(f"Data Connection Source:\n**{data_source}**")
     
     st.markdown("---")
     st.markdown("### Geographical Filters")
