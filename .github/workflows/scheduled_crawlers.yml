@@ -12,8 +12,11 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      NOTIFICATION_PROVIDER: none
+      NOTIFICATION_PROVIDER: "telegram"
       PROXY_URL: ""
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_CUSTOM_GATEWAY: ${{ secrets.TELEGRAM_CUSTOM_GATEWAY }}
 
     steps:
       - name: Checkout Code Repository
