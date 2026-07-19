@@ -23,6 +23,60 @@ st.set_page_config(
     page_icon="📊"
 )
 
+# -------------------------------------------------------------
+# 0. SECURITY GATEKEEPER LAYER
+# -------------------------------------------------------------
+def check_password():
+    """Returns True if the user has entered the correct password."""
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        master_password = None
+        try:
+            if "DASHBOARD_PASSWORD" in st.secrets:
+                master_password = st.secrets["DASHBOARD_PASSWORD"]
+        except Exception:
+            pass
+            
+        if not master_password:
+            master_password = os.getenv("DASHBOARD_PASSWORD", "admin123")
+            
+        if st.session_state["password_input"] == master_password:
+            st.session_state["authenticated"] = True
+            del st.session_state["password_input"]  # don't store password in session state
+            st.rerun()
+        else:
+            st.session_state["authenticated"] = False
+
+    # Check if already authenticated
+    if st.session_state.get("authenticated", False):
+        return True
+
+    # Show login UI
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.write("")
+        st.write("")
+        st.write("")
+        with st.container(border=True):
+            st.markdown("<h2 style='text-align: center; color: #00d2ff; font-family: Outfit, sans-serif;'>🔒 Institutional Access Required</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; color: #888; margin-bottom: 20px;'>aerodata-qcomm Alternative Data Platform</p>", unsafe_allow_html=True)
+            
+            st.text_input(
+                "Enter Access Key",
+                type="password",
+                on_change=password_entered,
+                key="password_input",
+                placeholder="Enter password..."
+            )
+            
+            if "authenticated" in st.session_state and not st.session_state["authenticated"]:
+                st.error("😕 Incorrect password. Please try again.")
+                
+    return False
+
+if not check_password():
+    st.stop()
+
 # Custom styles injection for high-fidelity dark aesthetics
 st.markdown("""
 <style>
