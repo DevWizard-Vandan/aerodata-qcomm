@@ -1,0 +1,8 @@
+name = "aerodata-qcomm-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+# DATABASE_URL and ALPHA_API_KEY will be populated securely via environment bindings or secrets.
+DATABASE_URL = ""
+ALPHA_API_KEY = ""

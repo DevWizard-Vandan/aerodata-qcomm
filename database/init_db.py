@@ -58,10 +58,43 @@ def initialize_database():
                 discount_price NUMERIC(10, 2),
                 stock_status BOOLEAN NOT NULL,
                 parent_ticker VARCHAR(50),
+                timestamp TIMESTAMPTZ,
+                price_index_value NUMERIC(10, 2),
+                daily_drift_velocity NUMERIC(10, 4),
                 PRIMARY KEY (observed_at, platform_name, store_id, product_id)
             );
             """
             cur.execute(create_history_query)
+
+            # Ensure columns exist in case table is already created
+            cur.execute("ALTER TABLE qcomm_catalog_history ADD COLUMN IF NOT EXISTS timestamp TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE qcomm_catalog_history ADD COLUMN IF NOT EXISTS price_index_value NUMERIC(10, 2);")
+            cur.execute("ALTER TABLE qcomm_catalog_history ADD COLUMN IF NOT EXISTS daily_drift_velocity NUMERIC(10, 4);")
+
+            # Create a trigger to automatically populate timestamp from observed_at if null
+            create_ts_trigger_function = """
+            CREATE OR REPLACE FUNCTION populate_timestamp()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF NEW.timestamp IS NULL THEN
+                    NEW.timestamp := NEW.observed_at;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """
+            cur.execute(create_ts_trigger_function)
+            
+            cur.execute("DROP TRIGGER IF EXISTS trg_populate_timestamp ON qcomm_catalog_history;")
+            cur.execute("""
+                CREATE TRIGGER trg_populate_timestamp
+                BEFORE INSERT OR UPDATE ON qcomm_catalog_history
+                FOR EACH ROW
+                EXECUTE FUNCTION populate_timestamp();
+            """)
+
+            # Update existing records
+            cur.execute("UPDATE qcomm_catalog_history SET timestamp = observed_at WHERE timestamp IS NULL;")
 
             # 2. Create qcomm_prices table for Neon high-speed indexed lookups
             logger.info("Creating table qcomm_prices...")
