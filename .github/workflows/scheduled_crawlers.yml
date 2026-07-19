@@ -2,13 +2,16 @@ name: aerodata-qcomm Scheduled Ingestion Nightly
 
 on:
   schedule:
-    - cron: "30 18 * * *" # Runs at 18:30 UTC / 23:30 IST nightly
-  workflow_dispatch:     # Allows manual forced execution via GitHub Actions UI
+    - cron: '30 18 * * *'  # The primary 23:30 IST nightly multi-city data scraping run
+    - cron: '0 */10 * * *' # The new 10-hour keep-alive interval to reset the hibernation clock
+  workflow_dispatch:
 
 jobs:
   scheduled-crawler:
     name: Execute Spatial Ingestion
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -25,18 +28,30 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialize Python Runtime Environment
+        if: github.event.schedule != '0 */10 * * *'
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: "pip"
 
       - name: Install Architecture Dependencies
+        if: github.event.schedule != '0 */10 * * *'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Orchestrator Pipeline
+        if: github.event.schedule != '0 */10 * * *'
         run: python main.py
 
       - name: Execute Historical Archival
+        if: github.event.schedule != '0 */10 * * *'
         run: python database/offload_historical.py
+
+      - name: Run Keep-Alive Heartbeat Pulse
+        if: github.event.schedule == '0 */10 * * *'
+        run: |
+          git config user.name "DevWizard-Vandan"
+          git config user.email "vandan.sharma06@gmail.com"
+          git commit --allow-empty -m "chore: serverless keep-alive heartbeat pulse"
+          git push origin main
