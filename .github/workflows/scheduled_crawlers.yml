@@ -17,6 +17,8 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_CUSTOM_GATEWAY: ${{ secrets.TELEGRAM_CUSTOM_GATEWAY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_REPO_ID: ${{ secrets.HF_REPO_ID }}
 
     steps:
       - name: Checkout Code Repository
@@ -35,3 +37,6 @@ jobs:
 
       - name: Run Orchestrator Pipeline
         run: python main.py
+
+      - name: Execute Historical Archival
+        run: python database/offload_historical.py
