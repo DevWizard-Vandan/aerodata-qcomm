@@ -817,6 +817,42 @@ with tab4:
                 alpha_df[["observed_date", "index_value", "drift_dod", "volatility_7d"]].sort_values("observed_date", ascending=False),
                 use_container_width=True
             )
+            
+        # 2. Compute stockout velocity vector (SVV)
+        from signals.alpha_engine import calculate_stockout_metrics
+        so_metrics_df = calculate_stockout_metrics(filtered_df)
+        
+        if not so_metrics_df.empty:
+            st.markdown("---")
+            st.subheader("Stockout Velocity Vector ($SVV$) Inventory Depletion Engine")
+            st.markdown("Smoothed rolling Day-over-Day Stockout Velocity Vector ($SVV = SR_t - SR_{t-1}$) mapped across primary urban consumption zones.")
+            
+            # Filter to target zones (Indiranagar, HSR Layout, Lower Parel)
+            target_zones = ["Indiranagar", "HSR Layout", "Lower Parel"]
+            so_chart_df = so_metrics_df[so_metrics_df["zone"].isin(target_zones)]
+            if so_chart_df.empty:
+                so_chart_df = so_metrics_df.copy()
+                
+            fig_so = px.line(
+                so_chart_df,
+                x="observed_date",
+                y="svv_ema",
+                color="zone",
+                title="Urban Zone Stockout Velocity Vector ($SVV$) 3-Day EMA",
+                labels={"svv_ema": "Stockout Velocity Vector (3-Day EMA)", "observed_date": "Observation Date", "zone": "Urban Center Zone"},
+                template="plotly_dark",
+                height=400,
+                markers=True
+            )
+            st.plotly_chart(fig_so, use_container_width=True)
+            
+            # Correlation analysis alert card
+            st.info(
+                "💡 **Macro Correlation Insight:** A simultaneous positive breakout in both the Micro-Price Index Drift (\\Delta CPI) "
+                "and the Stockout Velocity Vector ($SVV$) signals structural supply anomalies. When restocking velocity fails to match "
+                "consumer depletion (rising $SVV$), quick-commerce platforms lose buffer margins, immediately translating to upward pricing "
+                "drift (positive \\Delta CPI)."
+            )
     else:
         st.info("No data available to calculate Staples Index. Stream new records to activate signal telemetry.")
 
