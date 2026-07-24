@@ -1,405 +1,307 @@
 # aerodata-qcomm
 
-[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Streamlit](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![GitHub Actions](https://img.shields.io/badge/automation-GitHub%20Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
+[![Python 3.10](https://img.shields.io/badge/Python-3.10+-blue.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3100/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![GitHub Actions](https://img.shields.io/badge/Automation-GitHub%20Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
+[![Cloudflare Workers](https://img.shields.io/badge/Edge%20API-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 
-Institutional-grade quick-commerce alternative data pipeline for collecting, validating, and exporting **price**, **stockout**, and **catalog** signals from Zepto, Blinkit, and Swiggy Instamart across major Indian urban clusters.
-
----
-
-## Table of Contents
-
-- [Project Overview](#project-overview)
-- [Key Features](#key-features)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-  - [Run Pipeline Once](#run-pipeline-once)
-  - [Run Scheduled Daemon](#run-scheduled-daemon)
-  - [Run Dashboard](#run-dashboard)
-  - [Run with Docker Compose](#run-with-docker-compose)
-- [API and CLI Reference](#api-and-cli-reference)
-  - [Python Entry Points](#python-entry-points)
-  - [Cloudflare Worker API](#cloudflare-worker-api)
-- [Data Outputs](#data-outputs)
-- [Development Setup](#development-setup)
-- [Testing and Validation](#testing-and-validation)
-- [Deployment](#deployment)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [Roadmap](#roadmap)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
-- [Contact](#contact)
+**Institutional-grade quick-commerce alternative data engine** for harvesting, validating, federating, and analyzing high-frequency pricing, stockout velocity, and catalog metrics across **Zepto**, **Blinkit**, and **Swiggy Instamart** in major Indian urban consumption clusters (Bengaluru, Mumbai, Delhi NCR).
 
 ---
 
-## Project Overview
+## 📋 Table of Contents
 
-`aerodata-qcomm` orchestrates a multi-platform ingestion workflow that:
-
-1. Pulls storefront catalog payloads from quick-commerce platforms using browser impersonation and resilient networking.
-2. Normalizes and validates records with guardrails and entity/ticker mapping logic.
-3. Stores point-in-time observations in PostgreSQL/Timescale-compatible tables.
-4. Computes institutional signals (brand stockout index, staples inflation proxy, alpha drift metrics).
-5. Exports partitioned Parquet outputs into an S3-style directory layout.
-6. Exposes operational analytics via a Streamlit dashboard and optional Cloudflare Worker API.
-
-The codebase is designed around **daily scheduled ingestion**, **high-frequency regional snapshots**, and **quant-focused derived signals**.
-
----
-
-## Key Features
-
-- Multi-source ingestion for **Zepto**, **Blinkit**, and **Swiggy Instamart**
-- Geospatial scanning across predefined Tier-1 urban clusters
-- Network resiliency:
-  - DNS fallback resolution
-  - Proxy support with sticky session logic
-  - Optional ADB-triggered mobile IP rotation
-- Data quality controls:
-  - Mandatory field checks
-  - Price floor/ceiling constraints
-  - Historical Z-score anomaly quarantine
-- Point-in-time storage model (`observed_at` and `effective_at`)
-- Signal generation:
-  - Brand stockout rate index
-  - Staples basket inflation index (DoD)
-  - Alpha drift and stockout velocity analytics
-- Export to partitioned Parquet (`year=YYYY/month=MM/day=DD/`)
-- Monitoring & operations:
-  - Heartbeat file
-  - Rotating scheduler logs
-  - Optional Discord/Telegram alerts
-- Streamlit dashboard with regional filters and operational health views
+- [Project Overview](#-project-overview)
+- [Key Features](#-key-features)
+- [Architecture](#-architecture)
+- [Project Directory Layout](#-project-directory-layout)
+- [Quick Start & Installation](#-quick-start--installation)
+- [Configuration (.env)](#-configuration-env)
+- [Pipeline & System Operations](#-pipeline--system-operations)
+- [Quantitative Signals](#-quantitative-signals)
+- [Edge API & Visualizations](#-edge-api--visualizations)
+- [Documentation Hub](#-documentation-hub)
+- [License & Maintainer](#-license--maintainer)
 
 ---
 
-## Architecture
+## ⚡ Project Overview
+
+`aerodata-qcomm` solves the technical and analytical challenges of harvesting high-frequency quick-commerce alternative data at scale:
+
+1. **Resilient Ingestion**: Bypasses anti-bot controls using `curl_cffi` TLS Chrome 120 fingerprint impersonation, sticky proxy pools, dynamic session cookie harvesting, and UDP/DNS fallbacks.
+2. **Production Mode Toggle (`STRICT_PROD_MODE`)**: Enforces strict raw exception propagation (`ScraperHTTPError`, `RateLimitError`, `ScraperParsingError`) and outputs structured JSON telemetry logs during production burn-in.
+3. **Data Quality & Resolution**: Filters anomaly prices using rolling historical Z-score checks and maps unstructured product strings to ticker symbols (`AMUL`, `PEPSI`, `TATACONSUM`, etc.).
+4. **Hybrid Storage Federation**: Pairs Neon Serverless PostgreSQL / TimescaleDB (Hot Tier) with compressed Parquet archives stored on Hugging Face (`VaNam65/qcomm-cold-archive`) to stay within serverless tier ceilings.
+5. **Alpha Signal Derivation**: Calculates the **Staples Inflation Index ($\Delta CPI$)** and the **Stockout Velocity Vector ($SVV$)** to track daily price momentum and supply depletion rates.
+
+---
+
+## ✨ Key Features
+
+- **Multi-Platform Coverage**: Native scrapers for **Zepto**, **Blinkit**, and **Swiggy Instamart**.
+- **Geospatial Scanning**: Pre-configured coordinate matrix spanning key darkstore zones (Indiranagar, HSR Layout, Lower Parel).
+- **Network Management**:
+  - `NetworkManager`: Programmatic UDP DNS resolver.
+  - `ProxyManager`: Sticky session proxy rotation & mobile IP refresh.
+  - `SessionHarvester`: Dynamic headless session cookie extraction.
+- **Data Quality Guardrails**: Price bounds (INR 1.00 - 50,000.00), required field checks, and Z-score anomaly logging to `logs/quarantine.log`.
+- **Hybrid Data Federation**: Seamless query layer combining active hot PostgreSQL rows with historical Hugging Face cold storage Parquet files.
+- **Institutional Signals**:
+  - **$\Delta CPI$**: Volume-Weighted Average Price (VWAP) daily inflation drift across essential food categories.
+  - **$SVV$**: 3-day Exponential Moving Average (EMA) of day-over-day stockout rate changes.
+- **Operations & Telemetry**:
+  - `utils/notifier.py`: Automated Telegram and Discord alert integration.
+  - SRE System Health panel & password-protected Streamlit dashboard interface.
+
+---
+
+## 🏗️ Architecture
 
 ```mermaid
-flowchart LR
-    A[Scheduler / main.py] --> B[Scrapers<br/>Zepto Blinkit Swiggy]
-    B --> C[Data Guardrails + Entity Resolver]
-    C --> D[(PostgreSQL / Timescale<br/>qcomm_catalog_history)]
-    D --> E[qcomm_prices sync table]
-    D --> F[Signal Aggregator + Alpha Engine]
-    F --> G[Parquet Exporter<br/>s3_delivery_simulation/...]
-    D --> H[Historical Offload<br/>Hugging Face cold tier]
-    D --> I[Cloudflare Worker API]
-    D --> J[Streamlit Dashboard]
+flowchart TB
+    subgraph Ingestion Layer
+        A[GitHub Actions / Scheduler Daemon] -->|Cron 23:30 IST| B[main.py Orchestrator]
+        B --> C[Zepto Scraper]
+        B --> D[Blinkit Scraper]
+        B --> E[Swiggy Instamart Scraper]
+        
+        C & D & E --> F[curl_cffi + TLS Chrome 120 Impersonation]
+        F --> G[NetworkManager + ProxyManager]
+        G --> H[SessionHarvester Cookies]
+    end
+
+    subgraph Validation & Guardrails
+        C & D & E --> I[DataGuardrail Engine]
+        I -->|Z-Score Anomaly & Price Bounds| J[Entity & Ticker Resolver]
+        I -->|Corrupt Records| K[quarantine.log]
+    end
+
+    subgraph Hybrid Storage Tiering
+        J --> L[(Neon PostgreSQL / TimescaleDB Hot Tier)]
+        L -->|qcomm_catalog_history| M[Database Triggers & Indexes]
+        L -->|qcomm_prices| N[Sync Query Table]
+        L -->|Records > 30 Days| O[offload_historical.py]
+        O --> P[Hugging Face Cold Parquet Vault<br/>VaNam65/qcomm-cold-archive]
+    end
+
+    subgraph Signal Processing & Export
+        L --> Q[Signal Engine / alpha_engine.py]
+        Q --> R[Staples Inflation Index Δ CPI]
+        Q --> S[Stockout Velocity Vector SVV]
+        Q --> T[Parquet Exporter<br/>s3_delivery_simulation/]
+    end
+
+    subgraph Access & Visualization Layer
+        L & P --> U[Streamlit Federated Dashboard]
+        L --> V[Cloudflare Worker Edge API<br/>GET /api/v1/alpha]
+        A -->|Pipeline Failure| W[utils/notifier.py<br/>Telegram / Discord Alerts]
 ```
 
 ---
 
-## Project Structure
+## 📁 Project Directory Layout
 
 ```text
 aerodata-qcomm/
-├── main.py                       # End-to-end ingestion orchestrator
-├── scheduler.py                  # Daily scheduler daemon with retry/backoff
-├── config.py                     # Base runtime configuration
+├── main.py                       # Ingestion pipeline entry point
+├── scheduler.py                  # Daemon process with retry & backoff logic
+├── config.py                     # Global configuration & database settings
 ├── requirements.txt              # Python dependencies
-├── docker-compose.yml            # DB + scheduler + dashboard stack
-├── Dockerfile                    # App image definition
-├── deploy.sh                     # Docker-based deployment helper
-├── scrapers/                     # Platform connectors, network/proxy/session logic
-├── signals/                      # Signal computation, export, data quality tooling
-├── database/                     # DB init and hot/cold archival routines
-├── dashboard/                    # Streamlit monitoring and analytics app
-├── spatial_config/               # Geospatial cluster definitions
-├── cloudflare-worker/            # Optional edge API for alpha access
-└── .github/workflows/            # Scheduled ingestion workflow automation
+├── Dockerfile                    # Container definition
+├── docker-compose.yml            # Multi-service stack (DB + Scheduler + Dashboard)
+├── deploy.sh                     # Automated container deployment script
+├── LICENSE                       # MIT License
+├── .github/workflows/            # GitHub Actions CI/CD & scheduled workflows
+│   └── scheduled_crawlers.yml    # Nightly 23:30 IST crawler & keep-alive workflow
+├── scrapers/                     # Scraper connectors & network infrastructure
+│   ├── exceptions.py             # STRICT_PROD_MODE, exceptions, & JSON logging
+│   ├── zepto.py                  # Zepto PWA scraper
+│   ├── blinkit.py                # Blinkit layout scraper
+│   ├── swiggy.py                 # Swiggy Instamart scraper
+│   ├── network_manager.py        # UDP/DNS fallback resolution
+│   ├── proxy_manager.py          # Proxy pool & sticky session management
+│   ├── session_harvester.py      # Cookie harvester
+│   ├── spatial_filter.py         # Geospatial coordinate filter
+│   ├── web_targets.py            # Platform target URLs
+│   └── test_connection.py        # Diagnostic connector script
+├── signals/                      # Data quality & quantitative signal engine
+│   ├── alpha_engine.py           # Staples Index (Δ CPI) & Stockout Velocity (SVV)
+│   ├── data_guardrails.py        # Z-score anomaly checks & validation rules
+│   ├── entity_resolver.py        # Brand/product string to equity ticker mapping
+│   └── exporter.py               # Simulated S3 Parquet export manager
+├── database/                     # Database schemas & serverless tiering
+│   ├── init_db.py                # Table schemas & PostgreSQL triggers
+│   └── offload_historical.py     # Hot-to-Cold Hugging Face Parquet offloader
+├── dashboard/                    # Streamlit analytical dashboard
+│   ├── app.py                    # Multi-tab dashboard & password lock screen
+│   └── .streamlit/               # Streamlit styling configuration
+├── spatial_config/               # Target geospatial coordinate matrices
+│   └── geospatial_matrix.py      # Urban cluster definitions (BLR, BOM, DEL)
+├── cloudflare-worker/            # Edge API Gateway runtime
+│   ├── src/index.js              # Edge worker API routing logic
+│   └── wrangler.toml             # Cloudflare Worker configuration
+└── docs/                         # Repository documentation suite
+    ├── ARCHITECTURE.md           # Deep-dive architecture & data pipeline guide
+    ├── API_AND_SIGNALS.md        # Edge API docs & signal math formulations
+    ├── DEPLOYMENT.md             # Docker, GHA, Streamlit & Worker deployment guide
+    └── CONTRIBUTING.md           # Engineering guidelines & workflow rules
 ```
 
 ---
 
-## Prerequisites
+## 🚀 Quick Start & Installation
 
-- Python **3.10+**
-- PostgreSQL-compatible database (TimescaleDB recommended by project config)
-- `pip`
-- (Optional) Docker + Docker Compose
-- (Optional) Node.js + npm (for Cloudflare Worker)
-- (Optional) ADB tooling for mobile-network IP rotation workflows
+### Prerequisites
+- **Python 3.10+**
+- **PostgreSQL 14+ / TimescaleDB** (or Neon Serverless Postgres)
+- **Git**
 
----
+### Installation
 
-## Installation
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/DevWizard-Vandan/aerodata-qcomm.git
+   cd aerodata-qcomm
+   ```
 
-### 1) Clone and enter repository
+2. **Create and activate a virtual environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate        # Linux / macOS
+   # .\venv\Scripts\activate       # Windows PowerShell
+   ```
 
-```bash
-git clone https://github.com/DevWizard-Vandan/aerodata-qcomm.git
-cd aerodata-qcomm
-```
-
-### 2) Create and activate virtual environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows PowerShell
-```
-
-### 3) Install dependencies
-
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
+3. **Install dependencies**:
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
 
 ---
 
-## Configuration
+## ⚙️ Configuration (.env)
 
-Create a `.env` file (or export environment variables) before running services:
+Create a `.env` file in the project root:
 
-```bash
+```env
+# Production Mode Toggle (default: true)
+STRICT_PROD_MODE=true
+
+# Database Credentials
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=postgres
 DB_PASSWORD=your_secure_password
 DB_NAME=postgres
+DATABASE_URL=postgresql://postgres:your_secure_password@localhost:5432/postgres
 
-DATABASE_URL=                # optional override (used by DB connectors when set)
+# Telemetry Alerts (Telegram / Discord)
+NOTIFICATION_PROVIDER=telegram
+TELEGRAM_BOT_TOKEN=8743897444:AAHGfE7jqM2nsC5SckI_N6yJkR0sPAfS4Y4
+TELEGRAM_CHAT_ID=5751968943
+TELEGRAM_CUSTOM_GATEWAY=https://quantforge-keepalive.vandan-sharma06.workers.dev
+DISCORD_WEBHOOK_URL=
 
+# Proxy Configuration (Optional)
 PROXY_URL=
 PROXY_USER=
 PROXY_PASS=
 
-NOTIFICATION_PROVIDER=none   # none | discord | telegram
-DISCORD_WEBHOOK_URL=
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-TELEGRAM_CUSTOM_GATEWAY=
+# Hugging Face Cold Storage Vault
+HF_TOKEN=hf_your_token_here
+HF_REPO_ID=VaNam65/qcomm-cold-archive
 
-HF_TOKEN=
-HF_REPO_ID=
-
+# Dashboard Security Access Gate
 DASHBOARD_PASSWORD=admin123
 ```
 
-### Notes
-
-- `DATABASE_URL` takes precedence over individual DB variables where implemented.
-- Default dashboard password fallback is `admin123` if not overridden.
-- Cold-tier archival to Hugging Face is skipped when `HF_TOKEN` or `HF_REPO_ID` is missing.
-
 ---
 
-## Usage
+## 💻 Pipeline & System Operations
 
-### Run Pipeline Once
-
+### 1. Execute Ingestion Pipeline Once
 ```bash
 python main.py
 ```
 
-### Run Scheduled Daemon
-
-Production mode (daily trigger at 23:30 IST):
-
+### 2. Launch Daily Scheduler Daemon
+Runs continuous background monitoring with automated retries and exponential backoff:
 ```bash
 python scheduler.py
 ```
-
-Test mode (executes once after short delay, with second-level backoff):
-
+*To execute a quick 10-second test run*:
 ```bash
 python scheduler.py --test
 ```
 
-### Run Dashboard
+### 3. Run Hot-to-Cold Data Archival
+Offloads records older than 30 days to Hugging Face Parquet storage:
+```bash
+python database/offload_historical.py
+```
 
+### 4. Launch Analytics Dashboard
 ```bash
 streamlit run dashboard/app.py
 ```
+*Access the dashboard at `http://localhost:8501` (Password: `admin123`).*
 
-Open: `http://localhost:8501`
-
-### Run with Docker Compose
-
+### 5. Run via Docker Compose
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
-Services:
-- TimescaleDB: `localhost:5432`
-- Streamlit dashboard: `http://localhost:8501`
-- Scheduler daemon: containerized background service
+---
+
+## 📈 Quantitative Signals
+
+### Staples Basket Inflation Index ($\Delta CPI$)
+Tracks volume-weighted pricing momentum across essential food staples:
+$$\Delta CPI_t = \frac{\text{Index}_t - \text{Index}_{t-1}}{\text{Index}_{t-1}}$$
+
+### Stockout Velocity Vector ($SVV$)
+Measures the first-derivative rate of change of inventory depletion across darkstores, smoothed via a 3-day Exponential Moving Average (EMA):
+$$SVV_t = SR_t - SR_{t-1}$$
+$$SVV_{\text{EMA}, t} = 0.5 \cdot SVV_t + 0.5 \cdot SVV_{\text{EMA}, t-1}$$
+
+*See [docs/API_AND_SIGNALS.md](docs/API_AND_SIGNALS.md) for full mathematical formulations.*
 
 ---
 
-## API and CLI Reference
+## 🌐 Edge API & Visualizations
 
-### Python Entry Points
+### Cloudflare Worker Edge Route
+- **Route**: `GET /api/v1/alpha`
+- **Header**: `X-Alpha-Token: <token>`
+- **Response**: Real-time JSON array of latest pricing and stockout data.
 
-| Command | Purpose |
-|---|---|
-| `python main.py` | Execute full ingestion, validation, DB upsert, and signal export |
-| `python scheduler.py` | Start long-running scheduler daemon |
-| `python scheduler.py --test` | Run scheduler once in test mode |
-| `python database/offload_historical.py` | Offload records older than 30 days to Hugging Face and purge hot table |
-| `python scrapers/test_connection.py --url <target>` | Diagnostic endpoint connectivity test |
-
-### Cloudflare Worker API
-
-Located in `cloudflare-worker/` and configured via `wrangler.toml`.
-
-- Endpoint: `GET /api/v1/alpha`
-- Required header: `X-Alpha-Token: <token>`
-- Backend query: latest 100 rows from `qcomm_catalog_history`
-
-Example request:
-
-```bash
-curl -H "X-Alpha-Token: YOUR_TOKEN" \
-  "https://<your-worker-domain>/api/v1/alpha"
-```
-
-> **Assumption/Placeholder:** Worker deployment URL/domain is environment-specific and not defined in this repository.
+### Streamlit Dashboard Features
+- 🔒 **Security Gate**: Password lock screen protecting alternative data signals.
+- 📊 **Cross-Regional Arbitrage**: Multi-city spatial pricing comparisons.
+- 📈 **Alpha Signals**: Dual-axis Plotly charts for $\Delta CPI$ and $SVV$.
+- 🛠️ **SRE Health Monitoring**: Real-time database telemetry, system status, and Hugging Face archive sync state.
 
 ---
 
-## Data Outputs
+## 📚 Documentation Hub
 
-### Database tables
+Explore the full documentation suite in the [`docs/`](docs/) directory:
 
-- `qcomm_catalog_history` (primary PIT history table)
-- `qcomm_prices` (synced query-optimized table)
-
-### Parquet signal artifacts
-
-Output root:
-
-```text
-s3_delivery_simulation/year=YYYY/month=MM/day=DD/
-```
-
-Expected files per partition day:
-
-- `brand_stockouts.parquet`
-- `food_inflation_index.parquet`
+- 📐 [**Architecture Guide** (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md) - Pipeline design, network management, & hot/cold tiering.
+- 🔢 [**API & Signal Specs** (`docs/API_AND_SIGNALS.md`)](docs/API_AND_SIGNALS.md) - Cloudflare Worker API specifications & signal formulas.
+- 🚀 [**Deployment Guide** (`docs/DEPLOYMENT.md`)](docs/DEPLOYMENT.md) - Docker, GitHub Actions, Streamlit Cloud, & Worker setup.
+- 🤝 [**Contributing Guide** (`docs/CONTRIBUTING.md`)](docs/CONTRIBUTING.md) - Engineering practices, code style, & PR workflow.
 
 ---
 
-## Development Setup
+## 📄 License & Maintainer
 
-Recommended local workflow:
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
-1. Start PostgreSQL/TimescaleDB (local or Docker).
-2. Install Python dependencies.
-3. Export `.env` values.
-4. Run `python main.py` to initialize schema and produce sample outputs.
-5. Launch dashboard for validation and exploration.
-
----
-
-## Testing and Validation
-
-Current repository status:
-
-- No formal unit/integration test suite is configured.
-- Basic Python module compile checks can be used for syntax validation:
-
-```bash
-python -m compileall .
-```
-
-- Script-level checks are present in certain modules (`if __name__ == "__main__"` blocks) for smoke verification.
-
----
-
-## Deployment
-
-### Option A: Scripted Docker deployment
-
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
-
-### Option B: GitHub Actions scheduled workflow
-
-Workflow file: `.github/workflows/scheduled_crawlers.yml`
-
-- Nightly run trigger (`cron`) for primary ingestion
-- Separate keep-alive trigger
-- Includes ingestion and archival steps
-
-### Option C: Cloudflare Worker (optional API edge)
-
-```bash
-cd cloudflare-worker
-npm install
-npx wrangler deploy
-```
-
-> **Assumption/Placeholder:** Cloudflare account setup, secrets binding, and production route mapping must be configured externally.
-
----
-
-## Troubleshooting
-
-- **DB connection errors**
-  - Verify `DATABASE_URL` or `DB_*` values.
-  - Ensure DB service is reachable on expected host/port.
-- **No records exported**
-  - Check scheduler/main logs in `logs/`.
-  - Validate scraper responses and guardrail quarantine entries (`logs/quarantine.log`).
-- **Dashboard shows fallback/mock data**
-  - Confirm hot-tier DB access and optional Hugging Face cold-tier token/repo settings.
-- **Worker unauthorized responses**
-  - Validate `X-Alpha-Token` header matches deployed `ALPHA_API_KEY`.
-- **Proxy-related failures**
-  - Verify `PROXY_URL`, credentials, and connectivity.
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make focused changes with clear commit messages
-4. Validate locally
-5. Open a pull request with context and test notes
-
-> **Placeholder:** Add a dedicated `CONTRIBUTING.md` if you want stricter engineering/process guidelines.
-
----
-
-## Roadmap
-
-- [ ] Add formal unit/integration tests and CI quality gates
-- [ ] Introduce schema migration/versioning workflow
-- [ ] Expand geographic coverage and dynamic cluster management
-- [ ] Improve observability (metrics, traces, alert dashboards)
-- [ ] Harden API surface (versioned contracts, rate limits, audit logs)
-
----
-
-## License
-
-> **Placeholder:** No `LICENSE` file is currently present in this repository. Add one (for example MIT/Apache-2.0) before external distribution.
-
----
-
-## Acknowledgments
-
-- Platform/data engineering stack: Python, Pandas, PostgreSQL/Timescale
-- Visualization and app layer: Streamlit + Plotly
-- Edge API runtime: Cloudflare Workers
-- Cold storage flow: Hugging Face Hub tooling
-
----
-
-## Contact
-
-> **Placeholder:** Project maintainer contact details are not explicitly defined in the repository.  
-Suggested format: maintainer name, email, and/or issue tracker policy.
+**Project Lead & Maintainer**:
+- **Author**: Vandan Sharma ([@DevWizard-Vandan](https://github.com/DevWizard-Vandan))
+- **Email**: `vandan.sharma06@gmail.com`
+- **Repository**: [github.com/DevWizard-Vandan/aerodata-qcomm](https://github.com/DevWizard-Vandan/aerodata-qcomm)
