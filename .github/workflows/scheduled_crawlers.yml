@@ -40,6 +40,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Playwright Chromium Browser
+        if: github.event.schedule != '0 */10 * * *'
+        run: python -m playwright install chromium --with-deps
+
       - name: Run Orchestrator Pipeline
         if: github.event.schedule != '0 */10 * * *'
         run: python main.py

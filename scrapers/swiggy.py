@@ -58,16 +58,30 @@ class SwiggyScraper:
         proxy_mgr = ProxyManager()
         proxies = proxy_mgr.get_proxy_dict(session_key=session_key)
 
-        # Dynamic Cookie Harvesting
+        # Dynamic Cookie & Session Harvesting via Playwright Bootstrapper
         cookies = {}
         if session_harvester:
             cookies = session_harvester.harvest_session("Swiggy Instamart", network_manager, session_key=session_key)
+
+        try:
+            from scrapers.bootstrapper import get_live_session_context
+            session_ctx = get_live_session_context("Swiggy Instamart", lat, lng)
+            if session_ctx.get("cookies"):
+                cookies.update(session_ctx["cookies"])
+            if session_ctx.get("headers"):
+                headers.update(session_ctx["headers"])
+        except Exception as boot_err:
+            logger.warning(f"Swiggy Instamart Playwright bootstrapper warning: {boot_err}")
+            if STRICT_PROD_MODE:
+                log_structured_error("Swiggy Instamart", self.api_url, "BOOTSTRAP_ERROR", f"Swiggy bootstrapper failed: {boot_err}", zone=session_key, exc=boot_err)
+                raise ScraperError(f"Swiggy bootstrapper failed: {boot_err}", status_code="BOOTSTRAP_ERROR", target_url=self.api_url, platform="Swiggy Instamart", zone=session_key) from boot_err
             
         # Merge target coordinate cookies
         cookies["lat"] = str(lat)
         cookies["lng"] = str(lng)
         cookies["_instamart_lat"] = str(lat)
         cookies["_instamart_lng"] = str(lng)
+
 
         import time
         max_retries = 3

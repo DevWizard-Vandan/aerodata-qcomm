@@ -69,11 +69,23 @@ class ZeptoScraper:
         proxy_mgr = ProxyManager()
         proxies = proxy_mgr.get_proxy_dict(session_key=session_key)
         
-        # 3. Dynamic Cookie Harvesting
+        # 3. Dynamic Cookie & Session Harvesting via Playwright Bootstrapper
         cookies = {}
         if session_harvester:
             cookies = session_harvester.harvest_session("Zepto", network_manager, session_key=session_key)
         
+        try:
+            from scrapers.bootstrapper import get_live_session_context
+            session_ctx = get_live_session_context("Zepto", lat, lng)
+            if session_ctx.get("cookies"):
+                cookies.update(session_ctx["cookies"])
+            if session_ctx.get("headers"):
+                headers.update(session_ctx["headers"])
+        except Exception as boot_err:
+            logger.warning(f"Zepto Playwright bootstrapper warning: {boot_err}")
+            if STRICT_PROD_MODE:
+                log_structured_error("Zepto", self.api_url, "BOOTSTRAP_ERROR", f"Zepto bootstrapper failed: {boot_err}", zone=session_key, exc=boot_err)
+                raise ScraperError(f"Zepto bootstrapper failed: {boot_err}", status_code="BOOTSTRAP_ERROR", target_url=self.api_url, platform="Zepto", zone=session_key) from boot_err
         import time
         max_retries = 3
         last_exception = None
