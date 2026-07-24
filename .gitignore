@@ -29,3 +29,7 @@ s3_delivery_simulation/
 node_modules/
 package-lock.json
 
+# Temporary local tools
+gh_cli/
+
+

@@ -10,6 +10,14 @@ import json
 import logging
 from scrapers.web_targets import SWIGGY_WEB_URL
 from scrapers.network_manager import resolve_domain_with_fallback
+from scrapers.exceptions import (
+    STRICT_PROD_MODE,
+    ScraperError,
+    ScraperHTTPError,
+    RateLimitError,
+    ScraperParsingError,
+    log_structured_error
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -68,47 +76,89 @@ class SwiggyScraper:
             logger.info(f"Swiggy response status code: {response.status_code}")
             
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception as parse_err:
+                    if STRICT_PROD_MODE:
+                        log_structured_error("Swiggy Instamart", self.api_url, "PARSING_ERROR", f"Invalid JSON response: {parse_err}", zone=session_key, exc=parse_err)
+                        raise ScraperParsingError(f"Swiggy Instamart response is not valid JSON: {parse_err}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Swiggy Instamart", zone=session_key) from parse_err
+                    else:
+                        return self._get_mock_response(lat, lng)
+
                 # Verify if it contains valid products or widgets layout structures
                 if isinstance(data, dict) and ("data" in data or "widgets" in data or "storeId" in data):
                     logger.info("Successfully fetched live response from Swiggy Instamart.")
                     return data
                 else:
-                    logger.warning("Swiggy Instamart API returned empty/invalid layout structure. Activating mock fallback.")
-                    return self._get_mock_response(lat, lng)
+                    err_msg = "Swiggy Instamart API returned empty/invalid layout structure"
+                    log_structured_error("Swiggy Instamart", self.api_url, "PARSING_ERROR", err_msg, zone=session_key)
+                    if STRICT_PROD_MODE:
+                        raise ScraperParsingError(err_msg, status_code="PARSING_ERROR", target_url=self.api_url, platform="Swiggy Instamart", zone=session_key)
+                    else:
+                        logger.warning(f"{err_msg}. Activating mock fallback.")
+                        return self._get_mock_response(lat, lng)
             else:
-                logger.warning(f"Swiggy Instamart API returned status code {response.status_code}. Activating mock fallback.")
-                return self._get_mock_response(lat, lng)
+                status_code = response.status_code
+                err_msg = f"Swiggy Instamart API returned status code {status_code}"
+                log_structured_error("Swiggy Instamart", self.api_url, status_code, err_msg, zone=session_key)
+                if STRICT_PROD_MODE:
+                    if status_code == 429:
+                        raise RateLimitError(err_msg, status_code=429, target_url=self.api_url, platform="Swiggy Instamart", zone=session_key)
+                    else:
+                        raise ScraperHTTPError(err_msg, status_code=status_code, target_url=self.api_url, platform="Swiggy Instamart", zone=session_key)
+                else:
+                    logger.warning(f"Swiggy Instamart API returned status code {status_code}. Activating mock fallback.")
+                    return self._get_mock_response(lat, lng)
+        except (ScraperError, RateLimitError, ScraperHTTPError, ScraperParsingError) as se:
+            raise se
         except Exception as e:
-            logger.warning(f"Error fetching live Swiggy Instamart API ({e}). Activating mock fallback.")
-            return self._get_mock_response(lat, lng)
+            err_msg = f"Error fetching live Swiggy Instamart API ({e})"
+            log_structured_error("Swiggy Instamart", self.api_url, 500, err_msg, zone=session_key, exc=e)
+            if STRICT_PROD_MODE:
+                raise ScraperHTTPError(err_msg, status_code=500, target_url=self.api_url, platform="Swiggy Instamart", zone=session_key) from e
+            else:
+                logger.warning(f"Error fetching live Swiggy Instamart API ({e}). Activating mock fallback.")
+                return self._get_mock_response(lat, lng)
 
     def parse_layout(self, response_json):
         """
         Recursively parses the Swiggy Instamart response to extract product listings.
         Converts prices from paise to rupees, and returns standard records.
         """
+        if not isinstance(response_json, (dict, list)):
+            if STRICT_PROD_MODE:
+                log_structured_error("Swiggy Instamart", self.api_url, "PARSING_ERROR", "Swiggy layout response payload is not dict or list")
+                raise ScraperParsingError("Swiggy layout response payload is not dict or list", status_code="PARSING_ERROR", target_url=self.api_url, platform="Swiggy Instamart")
+            return []
+
         products = []
-        
-        # Try to locate store identifiers
-        store_id = "store_swiggy_indiranagar"
-        if "storeId" in response_json:
-            store_id = response_json["storeId"]
-        elif "store_id" in response_json:
-            store_id = response_json["store_id"]
-        elif "data" in response_json and isinstance(response_json["data"], dict):
-            store_id = response_json["data"].get("storeId") or response_json["data"].get("store_id") or store_id
+        try:
+            store_id = "store_swiggy_indiranagar"
+            if isinstance(response_json, dict):
+                if "storeId" in response_json:
+                    store_id = response_json["storeId"]
+                elif "store_id" in response_json:
+                    store_id = response_json["store_id"]
+                elif "data" in response_json and isinstance(response_json["data"], dict):
+                    store_id = response_json["data"].get("storeId") or response_json["data"].get("store_id") or store_id
+                    
+            store_info = {"storeId": store_id}
             
-        store_info = {"storeId": store_id}
-        
-        self._extract_products_recursive(response_json, products, store_info)
-        logger.info(f"Swiggy parsed {len(products)} products from the layout response.")
+            self._extract_products_recursive(response_json, products, store_info)
+        except Exception as e:
+            if STRICT_PROD_MODE:
+                log_structured_error("Swiggy Instamart", self.api_url, "PARSING_ERROR", f"Layout parsing failed: {e}", exc=e)
+                raise ScraperParsingError(f"Swiggy layout parsing failed: {e}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Swiggy Instamart") from e
+            else:
+                logger.warning(f"Error parsing Swiggy layout: {e}")
+
+        logger.info(f"Swiggy Instamart parsed {len(products)} products from layout response.")
         return products
 
     def _extract_products_recursive(self, node, products_list, store_info):
         if isinstance(node, dict):
             has_id = "id" in node or "productId" in node or "product_id" in node
-            has_price = "price" in node or "mrp" in node or "sellingPrice" in node or "price_info" in node or "variants" in node
+            has_price = "price" in node or "mrp" in node or "sellingPrice" in node
             
             if "product" in node and isinstance(node["product"], dict):
                 prod = self._parse_product_node(node["product"], store_info)
@@ -128,26 +178,15 @@ class SwiggyScraper:
     def _parse_product_node(self, node, store_info):
         try:
             product_id = node.get("id") or node.get("productId") or node.get("product_id")
-            product_name = node.get("name") or node.get("productName") or node.get("title")
+            product_name = node.get("name") or node.get("productName") or node.get("product_name") or node.get("title")
             if not product_id or not product_name:
                 return None
-                
-            brand_name = node.get("brand") or node.get("brand_name") or "Unknown"
-            category = node.get("category") or node.get("category_name") or "General"
             
-            mrp_paise = 0
-            selling_price_paise = 0
+            brand_name = node.get("brand") or node.get("brandName") or node.get("brand_name") or "Unknown"
+            category = node.get("categoryName") or node.get("category_name") or node.get("category") or "General"
             
-            if "price" in node:
-                mrp_paise = node["price"]
-                selling_price_paise = node.get("mrp") or node["price"]
-            elif "mrp" in node:
-                mrp_paise = node["mrp"]
-                selling_price_paise = node.get("price") or node.get("sellingPrice") or mrp_paise
-            elif "variants" in node and isinstance(node["variants"], list) and len(node["variants"]) > 0:
-                var = node["variants"][0]
-                mrp_paise = var.get("mrp") or var.get("price") or 0
-                selling_price_paise = var.get("price") or var.get("sellingPrice") or mrp_paise
+            mrp_paise = node.get("mrp") or node.get("originalPrice") or node.get("original_price") or node.get("price") or 0
+            selling_price_paise = node.get("sellingPrice") or node.get("selling_price") or node.get("discountPrice") or node.get("discount_price") or mrp_paise
             
             try:
                 mrp = float(mrp_paise) / 100.0 if float(mrp_paise) > 100 else float(mrp_paise)
@@ -159,15 +198,10 @@ class SwiggyScraper:
             except (ValueError, TypeError):
                 discount_price = mrp
                 
-            out_of_stock = node.get("outOfStock") or node.get("out_of_stock") or (node.get("stock", 1) == 0) or (node.get("inStock") == False)
-            if "inStock" in node:
-                out_of_stock = not node["inStock"]
-            elif "in_stock" in node:
-                out_of_stock = not node["in_stock"]
-                
+            out_of_stock = node.get("outOfStock") or node.get("out_of_stock") or (node.get("stock", 1) == 0) or (node.get("status") == "OUT_OF_STOCK")
             stock_status = not out_of_stock
             
-            store_id = store_info.get("storeId") or "store_swiggy_default"
+            store_id = store_info.get("storeId") or store_info.get("store_id") or "store_blr_indiranagar"
             
             return {
                 "platform_name": "Swiggy Instamart",
@@ -186,6 +220,11 @@ class SwiggyScraper:
             return None
 
     def _get_mock_response(self, lat, lng):
+        if STRICT_PROD_MODE:
+            err_msg = "Mock data generation disabled in STRICT_PROD_MODE for SwiggyScraper."
+            log_structured_error("Swiggy Instamart", self.api_url, "MOCK_DISABLED", err_msg)
+            raise ScraperError(err_msg, status_code="MOCK_DISABLED", target_url=self.api_url, platform="Swiggy Instamart")
+
         logger.info(f"Injecting high-fidelity mock Swiggy Instamart layout response for ({lat}, {lng}).")
         
         # Deterministic price variance multiplier based on coordinate values (varying from 0% to 25%)

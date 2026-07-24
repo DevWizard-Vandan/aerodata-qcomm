@@ -11,6 +11,7 @@ from scrapers.blinkit import BlinkitScraper
 from scrapers.swiggy import SwiggyScraper
 from scrapers.spatial_filter import SpatialFilterEngine
 from scrapers.network_manager import NetworkManager
+from scrapers.exceptions import STRICT_PROD_MODE, ScraperError, log_structured_error
 from signals.exporter import export_signals
 from signals.entity_resolver import EntityResolver
 from scrapers.session_harvester import SessionHarvester
@@ -21,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def run_pipeline():
-    logger.info("Initializing aerodata-qcomm alternative data engine...")
+    logger.info(f"Initializing aerodata-qcomm alternative data engine (STRICT_PROD_MODE={STRICT_PROD_MODE})...")
     
     total_rows = 0
     breakdown = []

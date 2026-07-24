@@ -10,6 +10,14 @@ import json
 import logging
 from scrapers.web_targets import ZEPTO_WEB_URL
 from scrapers.network_manager import resolve_domain_with_fallback
+from scrapers.exceptions import (
+    STRICT_PROD_MODE,
+    ScraperError,
+    ScraperHTTPError,
+    RateLimitError,
+    ScraperParsingError,
+    log_structured_error
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -78,101 +86,78 @@ class ZeptoScraper:
             logger.info(f"Response status code: {response.status_code}")
             
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception as parse_err:
+                    if STRICT_PROD_MODE:
+                        log_structured_error("Zepto", self.api_url, "PARSING_ERROR", f"Invalid JSON response: {parse_err}", zone=session_key, exc=parse_err)
+                        raise ScraperParsingError(f"Zepto response is not valid JSON: {parse_err}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Zepto", zone=session_key) from parse_err
+                    else:
+                        return self._get_mock_response(lat, lng)
                 logger.info("Successfully fetched live response from Zepto API.")
                 return data
             else:
-                logger.warning(f"Zepto API returned status code {response.status_code}. Activating mock data fallback.")
-                return self._get_mock_response(lat, lng)
+                status_code = response.status_code
+                err_msg = f"Zepto API returned status code {status_code}"
+                log_structured_error("Zepto", self.api_url, status_code, err_msg, zone=session_key)
+                if STRICT_PROD_MODE:
+                    if status_code == 429:
+                        raise RateLimitError(err_msg, status_code=429, target_url=self.api_url, platform="Zepto", zone=session_key)
+                    else:
+                        raise ScraperHTTPError(err_msg, status_code=status_code, target_url=self.api_url, platform="Zepto", zone=session_key)
+                else:
+                    logger.warning(f"Zepto API returned status code {status_code}. Activating mock data fallback.")
+                    return self._get_mock_response(lat, lng)
                 
+        except (ScraperError, RateLimitError, ScraperHTTPError, ScraperParsingError) as se:
+            raise se
         except Exception as e:
-            logger.warning(f"Error fetching live Zepto API ({e}). Activating mock data fallback.")
-            return self._get_mock_response(lat, lng)
+            err_msg = f"Error fetching live Zepto API ({e})"
+            log_structured_error("Zepto", self.api_url, 500, err_msg, zone=session_key, exc=e)
+            if STRICT_PROD_MODE:
+                raise ScraperHTTPError(err_msg, status_code=500, target_url=self.api_url, platform="Zepto", zone=session_key) from e
+            else:
+                logger.warning(f"Error fetching live Zepto API ({e}). Activating mock data fallback.")
+                return self._get_mock_response(lat, lng)
 
     def parse_layout(self, response_json):
         """
         Recursively parses the layout widget array from the JSON response to extract product catalog data.
         """
-        products = []
-        
-        store_info = {}
-        if "storeDetails" in response_json:
-            store_info = response_json["storeDetails"]
-        elif "store_details" in response_json:
-            store_info = response_json["store_details"]
-        elif "store" in response_json:
-            store_info = response_json["store"]
+        if not isinstance(response_json, (dict, list)):
+            if STRICT_PROD_MODE:
+                log_structured_error("Zepto", self.api_url, "PARSING_ERROR", "Zepto layout response payload is not dict or list")
+                raise ScraperParsingError("Zepto layout response payload is not dict or list", status_code="PARSING_ERROR", target_url=self.api_url, platform="Zepto")
+            return []
 
-        self._extract_products_recursive(response_json, products, store_info)
-        
+        products = []
+        try:
+            store_info = {}
+            if isinstance(response_json, dict):
+                if "storeDetails" in response_json:
+                    store_info = response_json["storeDetails"]
+                elif "store_details" in response_json:
+                    store_info = response_json["store_details"]
+                elif "store" in response_json:
+                    store_info = response_json["store"]
+
+            self._extract_products_recursive(response_json, products, store_info)
+        except Exception as e:
+            if STRICT_PROD_MODE:
+                log_structured_error("Zepto", self.api_url, "PARSING_ERROR", f"Layout parsing failed: {e}", exc=e)
+                raise ScraperParsingError(f"Zepto layout parsing failed: {e}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Zepto") from e
+            else:
+                logger.warning(f"Error parsing Zepto layout: {e}")
+
         logger.info(f"Parsed {len(products)} products from the layout response.")
         return products
 
-    def _extract_products_recursive(self, node, products_list, store_info):
-        if isinstance(node, dict):
-            has_id = "id" in node or "productId" in node or "product_id" in node
-            has_price = "mrp" in node or "sellingPrice" in node or "selling_price" in node or "price" in node
-            
-            if "product" in node and isinstance(node["product"], dict):
-                prod = self._parse_product_node(node["product"], store_info)
-                if prod:
-                    products_list.append(prod)
-            elif has_id and has_price and "name" in node:
-                prod = self._parse_product_node(node, store_info)
-                if prod:
-                    products_list.append(prod)
-            else:
-                for val in node.values():
-                    self._extract_products_recursive(val, products_list, store_info)
-        elif isinstance(node, list):
-            for item in node:
-                self._extract_products_recursive(item, products_list, store_info)
-
-    def _parse_product_node(self, node, store_info):
-        try:
-            product_id = node.get("id") or node.get("productId") or node.get("product_id")
-            product_name = node.get("name") or node.get("productName") or node.get("product_name") or node.get("title")
-            if not product_id or not product_name:
-                return None
-            
-            brand_name = node.get("brand") or node.get("brandName") or node.get("brand_name") or "Unknown"
-            category = node.get("categoryName") or node.get("category_name") or node.get("category") or "General"
-            
-            mrp_paise = node.get("mrp") or node.get("originalPrice") or node.get("original_price") or node.get("price") or 0
-            selling_price_paise = node.get("sellingPrice") or node.get("selling_price") or node.get("discountPrice") or node.get("discount_price") or mrp_paise
-            
-            try:
-                mrp = float(mrp_paise) / 100.0 if float(mrp_paise) > 100 else float(mrp_paise)
-            except (ValueError, TypeError):
-                mrp = 0.0
-                
-            try:
-                discount_price = float(selling_price_paise) / 100.0 if float(selling_price_paise) > 100 else float(selling_price_paise)
-            except (ValueError, TypeError):
-                discount_price = mrp
-                
-            out_of_stock = node.get("outOfStock") or node.get("out_of_stock") or (node.get("stock", 1) == 0) or (node.get("status") == "OUT_OF_STOCK")
-            stock_status = not out_of_stock
-            
-            store_id = store_info.get("storeId") or store_info.get("store_id") or "store_blr_indiranagar"
-            
-            return {
-                "platform_name": "Zepto",
-                "store_id": str(store_id),
-                "product_id": str(product_id),
-                "product_name": str(product_name),
-                "category": str(category),
-                "brand_name": str(brand_name),
-                "listed_price": mrp,
-                "discount_price": discount_price,
-                "stock_status": bool(stock_status),
-                "parent_ticker": "ZEPTO"
-            }
-        except Exception as e:
-            logger.warning(f"Error parsing product node: {e}")
-            return None
-
     def _get_mock_response(self, lat, lng):
+        if STRICT_PROD_MODE:
+            err_msg = "Mock data generation disabled in STRICT_PROD_MODE for ZeptoScraper."
+            log_structured_error("Zepto", self.api_url, "MOCK_DISABLED", err_msg)
+            raise ScraperError(err_msg, status_code="MOCK_DISABLED", target_url=self.api_url, platform="Zepto")
+
         logger.info(f"Injecting high-fidelity mock Zepto layout response for ({lat}, {lng}).")
         
         # Deterministic price variance multiplier based on coordinate values (varying from 0% to 25%)
