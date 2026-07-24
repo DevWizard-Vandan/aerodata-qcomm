@@ -29,7 +29,7 @@ class ZeptoScraper:
     def fetch_page(self, lat: float, lng: float, network_manager=None, session_harvester=None, session_key=None):
         """
         Fetches the Zepto store layout page for a given latitude and longitude.
-        Uses curl_cffi with DNS fallback mapping and proxy settings.
+        Uses curl_cffi with Chrome 124 impersonation, updated headers, and retry logic.
         """
         payload = {
             "latitude": lat,
@@ -44,7 +44,17 @@ class ZeptoScraper:
             "Content-Type": "application/json",
             "Origin": "https://www.zeptonow.com",
             "Referer": "https://www.zeptonow.com/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-site",
+            "x-user-sub-platform": "WEB",
+            "app_version": "12.0.0",
+            "latitude": str(lat),
+            "longitude": str(lng)
         }
         
         # 1. Resolve host with programmatic UDP fallback
@@ -64,61 +74,79 @@ class ZeptoScraper:
         if session_harvester:
             cookies = session_harvester.harvest_session("Zepto", network_manager, session_key=session_key)
         
-        try:
-            from curl_cffi import requests
-            logger.info(f"Zepto PWA POST request to {self.api_url} with payload {payload}")
-            
-            # Using Session to feed custom CurlOpt.RESOLVE settings
-            with requests.Session(curl_options=curl_opts) as s:
-                response = s.post(
-                    self.api_url, 
-                    json=payload, 
-                    headers=headers, 
-                    cookies=cookies,
-                    impersonate="chrome120",
-                    proxies=proxies,
-                    timeout=15
-                )
-            
-            if network_manager:
-                network_manager.handle_request_status(response.status_code)
+        import time
+        max_retries = 3
+        last_exception = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                from curl_cffi import requests
+                logger.info(f"Zepto POST request attempt #{attempt} to {self.api_url} (lat={lat}, lng={lng})")
                 
-            logger.info(f"Response status code: {response.status_code}")
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                except Exception as parse_err:
-                    if STRICT_PROD_MODE:
-                        log_structured_error("Zepto", self.api_url, "PARSING_ERROR", f"Invalid JSON response: {parse_err}", zone=session_key, exc=parse_err)
-                        raise ScraperParsingError(f"Zepto response is not valid JSON: {parse_err}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Zepto", zone=session_key) from parse_err
-                    else:
-                        return self._get_mock_response(lat, lng)
-                logger.info("Successfully fetched live response from Zepto API.")
-                return data
-            else:
-                status_code = response.status_code
-                err_msg = f"Zepto API returned status code {status_code}"
-                log_structured_error("Zepto", self.api_url, status_code, err_msg, zone=session_key)
-                if STRICT_PROD_MODE:
-                    if status_code == 429:
-                        raise RateLimitError(err_msg, status_code=429, target_url=self.api_url, platform="Zepto", zone=session_key)
-                    else:
-                        raise ScraperHTTPError(err_msg, status_code=status_code, target_url=self.api_url, platform="Zepto", zone=session_key)
+                with requests.Session(curl_options=curl_opts) as s:
+                    response = s.post(
+                        self.api_url, 
+                        json=payload, 
+                        headers=headers, 
+                        cookies=cookies,
+                        impersonate="chrome124",
+                        proxies=proxies,
+                        timeout=15
+                    )
+                
+                if network_manager:
+                    network_manager.handle_request_status(response.status_code)
+                    
+                logger.info(f"Zepto response status code: {response.status_code}")
+                
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except Exception as parse_err:
+                        if STRICT_PROD_MODE:
+                            log_structured_error("Zepto", self.api_url, "PARSING_ERROR", f"Invalid JSON response: {parse_err}", zone=session_key, exc=parse_err)
+                            raise ScraperParsingError(f"Zepto response is not valid JSON: {parse_err}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Zepto", zone=session_key) from parse_err
+                        else:
+                            return self._get_mock_response(lat, lng)
+                    logger.info("Successfully fetched live response from Zepto API.")
+                    return data
                 else:
-                    logger.warning(f"Zepto API returned status code {status_code}. Activating mock data fallback.")
+                    status_code = response.status_code
+                    err_msg = f"Zepto API returned status code {status_code}"
+                    log_structured_error("Zepto", self.api_url, status_code, err_msg, zone=session_key)
+                    
+                    if attempt < max_retries and status_code in (403, 429, 500, 502, 503, 504):
+                        backoff = 2 ** attempt
+                        logger.warning(f"Zepto request failed with status {status_code}. Retrying in {backoff}s...")
+                        time.sleep(backoff)
+                        continue
+
+                    if STRICT_PROD_MODE:
+                        if status_code == 429:
+                            raise RateLimitError(err_msg, status_code=429, target_url=self.api_url, platform="Zepto", zone=session_key)
+                        else:
+                            raise ScraperHTTPError(err_msg, status_code=status_code, target_url=self.api_url, platform="Zepto", zone=session_key)
+                    else:
+                        logger.warning(f"Zepto API returned status code {status_code}. Activating mock data fallback.")
+                        return self._get_mock_response(lat, lng)
+                    
+            except (ScraperError, RateLimitError, ScraperHTTPError, ScraperParsingError) as se:
+                raise se
+            except Exception as e:
+                last_exception = e
+                err_msg = f"Error fetching live Zepto API ({e})"
+                log_structured_error("Zepto", self.api_url, 500, err_msg, zone=session_key, exc=e)
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.warning(f"Zepto network exception ({e}). Retrying in {backoff}s...")
+                    time.sleep(backoff)
+                    continue
+
+                if STRICT_PROD_MODE:
+                    raise ScraperHTTPError(err_msg, status_code=500, target_url=self.api_url, platform="Zepto", zone=session_key) from e
+                else:
+                    logger.warning(f"Error fetching live Zepto API ({e}). Activating mock data fallback.")
                     return self._get_mock_response(lat, lng)
-                
-        except (ScraperError, RateLimitError, ScraperHTTPError, ScraperParsingError) as se:
-            raise se
-        except Exception as e:
-            err_msg = f"Error fetching live Zepto API ({e})"
-            log_structured_error("Zepto", self.api_url, 500, err_msg, zone=session_key, exc=e)
-            if STRICT_PROD_MODE:
-                raise ScraperHTTPError(err_msg, status_code=500, target_url=self.api_url, platform="Zepto", zone=session_key) from e
-            else:
-                logger.warning(f"Error fetching live Zepto API ({e}). Activating mock data fallback.")
-                return self._get_mock_response(lat, lng)
 
     def parse_layout(self, response_json):
         """

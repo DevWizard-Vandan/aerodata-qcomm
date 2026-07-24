@@ -39,7 +39,16 @@ class BlinkitScraper:
             "Content-Type": "application/json",
             "Origin": "https://blinkit.com",
             "Referer": "https://blinkit.com/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "lat": str(lat),
+            "lon": str(lng),
+            "app_client_id": "consumer_web"
         }
 
         # Resolve IP via network manager DNS fallback mapping to web domain
@@ -59,70 +68,89 @@ class BlinkitScraper:
         if session_harvester:
             cookies = session_harvester.harvest_session("Blinkit", network_manager, session_key=session_key)
 
-        try:
-            from curl_cffi import requests
-            logger.info(f"Blinkit PWA POST request to {self.api_url} with payload {payload}")
-            
-            with requests.Session(curl_options=curl_opts) as s:
-                response = s.post(
-                    self.api_url,
-                    json=payload,
-                    headers=headers,
-                    cookies=cookies,
-                    impersonate="chrome120",
-                    proxies=proxies,
-                    timeout=15
-                )
-            
-            if network_manager:
-                network_manager.handle_request_status(response.status_code)
+        import time
+        max_retries = 3
+        last_exception = None
 
-            logger.info(f"Blinkit response status code: {response.status_code}")
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                except Exception as parse_err:
-                    if STRICT_PROD_MODE:
-                        log_structured_error("Blinkit", self.api_url, "PARSING_ERROR", f"Invalid JSON response: {parse_err}", zone=session_key, exc=parse_err)
-                        raise ScraperParsingError(f"Blinkit response is not valid JSON: {parse_err}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Blinkit", zone=session_key) from parse_err
+        for attempt in range(1, max_retries + 1):
+            try:
+                from curl_cffi import requests
+                logger.info(f"Blinkit POST request attempt #{attempt} to {self.api_url} (lat={lat}, lng={lng})")
+                
+                with requests.Session(curl_options=curl_opts) as s:
+                    response = s.post(
+                        self.api_url,
+                        json=payload,
+                        headers=headers,
+                        cookies=cookies,
+                        impersonate="chrome124",
+                        proxies=proxies,
+                        timeout=15
+                    )
+                
+                if network_manager:
+                    network_manager.handle_request_status(response.status_code)
+
+                logger.info(f"Blinkit response status code: {response.status_code}")
+                
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except Exception as parse_err:
+                        if STRICT_PROD_MODE:
+                            log_structured_error("Blinkit", self.api_url, "PARSING_ERROR", f"Invalid JSON response: {parse_err}", zone=session_key, exc=parse_err)
+                            raise ScraperParsingError(f"Blinkit response is not valid JSON: {parse_err}", status_code="PARSING_ERROR", target_url=self.api_url, platform="Blinkit", zone=session_key) from parse_err
+                        else:
+                            return self._get_mock_response(lat, lng)
+
+                    # Verify if it contains valid products or tab structures
+                    if isinstance(data, dict) and ("tabs" in data or "sections" in data or "merchant_id" in data):
+                        logger.info("Successfully fetched live response from Blinkit API.")
+                        return data
                     else:
-                        return self._get_mock_response(lat, lng)
-
-                # Verify if it contains valid products or tab structures
-                if isinstance(data, dict) and ("tabs" in data or "sections" in data or "merchant_id" in data):
-                    logger.info("Successfully fetched live response from Blinkit API.")
-                    return data
+                        err_msg = "Blinkit API returned empty/invalid layout structure"
+                        log_structured_error("Blinkit", self.api_url, "PARSING_ERROR", err_msg, zone=session_key)
+                        if STRICT_PROD_MODE:
+                            raise ScraperParsingError(err_msg, status_code="PARSING_ERROR", target_url=self.api_url, platform="Blinkit", zone=session_key)
+                        else:
+                            logger.warning(f"{err_msg}. Activating mock fallback.")
+                            return self._get_mock_response(lat, lng)
                 else:
-                    err_msg = "Blinkit API returned empty/invalid layout structure"
-                    log_structured_error("Blinkit", self.api_url, "PARSING_ERROR", err_msg, zone=session_key)
+                    status_code = response.status_code
+                    err_msg = f"Blinkit API returned status code {status_code}"
+                    log_structured_error("Blinkit", self.api_url, status_code, err_msg, zone=session_key)
+
+                    if attempt < max_retries and status_code in (403, 429, 500, 502, 503, 504):
+                        backoff = 2 ** attempt
+                        logger.warning(f"Blinkit request failed with status {status_code}. Retrying in {backoff}s...")
+                        time.sleep(backoff)
+                        continue
+
                     if STRICT_PROD_MODE:
-                        raise ScraperParsingError(err_msg, status_code="PARSING_ERROR", target_url=self.api_url, platform="Blinkit", zone=session_key)
+                        if status_code == 429:
+                            raise RateLimitError(err_msg, status_code=429, target_url=self.api_url, platform="Blinkit", zone=session_key)
+                        else:
+                            raise ScraperHTTPError(err_msg, status_code=status_code, target_url=self.api_url, platform="Blinkit", zone=session_key)
                     else:
-                        logger.warning(f"{err_msg}. Activating mock fallback.")
+                        logger.warning(f"Blinkit API returned status code {status_code}. Activating mock fallback.")
                         return self._get_mock_response(lat, lng)
-            else:
-                status_code = response.status_code
-                err_msg = f"Blinkit API returned status code {status_code}"
-                log_structured_error("Blinkit", self.api_url, status_code, err_msg, zone=session_key)
+            except (ScraperError, RateLimitError, ScraperHTTPError, ScraperParsingError) as se:
+                raise se
+            except Exception as e:
+                last_exception = e
+                err_msg = f"Error fetching live Blinkit API ({e})"
+                log_structured_error("Blinkit", self.api_url, 500, err_msg, zone=session_key, exc=e)
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.warning(f"Blinkit network exception ({e}). Retrying in {backoff}s...")
+                    time.sleep(backoff)
+                    continue
+
                 if STRICT_PROD_MODE:
-                    if status_code == 429:
-                        raise RateLimitError(err_msg, status_code=429, target_url=self.api_url, platform="Blinkit", zone=session_key)
-                    else:
-                        raise ScraperHTTPError(err_msg, status_code=status_code, target_url=self.api_url, platform="Blinkit", zone=session_key)
+                    raise ScraperHTTPError(err_msg, status_code=500, target_url=self.api_url, platform="Blinkit", zone=session_key) from e
                 else:
-                    logger.warning(f"Blinkit API returned status code {status_code}. Activating mock fallback.")
+                    logger.warning(f"Error fetching live Blinkit API ({e}). Activating mock fallback.")
                     return self._get_mock_response(lat, lng)
-        except (ScraperError, RateLimitError, ScraperHTTPError, ScraperParsingError) as se:
-            raise se
-        except Exception as e:
-            err_msg = f"Error fetching live Blinkit API ({e})"
-            log_structured_error("Blinkit", self.api_url, 500, err_msg, zone=session_key, exc=e)
-            if STRICT_PROD_MODE:
-                raise ScraperHTTPError(err_msg, status_code=500, target_url=self.api_url, platform="Blinkit", zone=session_key) from e
-            else:
-                logger.warning(f"Error fetching live Blinkit API ({e}). Activating mock fallback.")
-                return self._get_mock_response(lat, lng)
 
     def parse_layout(self, response_json):
         """
