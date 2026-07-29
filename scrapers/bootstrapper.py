@@ -61,15 +61,13 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(2000)
                 
-                # Execute subtle scroll interactions for Zepto and Blinkit to trigger catalog XHR fetches
-                if platform in ("Zepto", "Blinkit"):
-                    page.evaluate("window.scrollBy(0, 500)")
-                    page.wait_for_timeout(3000)
-                else:
-                    page.evaluate("window.scrollBy(0, 500)")
-                    page.wait_for_timeout(3000)
+                # Execute multi-stage scroll to trigger lazy-loaded category XHR fetches
+                page.evaluate("window.scrollBy(0, 800)")
+                page.wait_for_timeout(2000)
+                page.evaluate("window.scrollBy(0, 800)")
+                page.wait_for_timeout(3000)
             except Exception as nav_err:
                 logger.warning(f"Playwright navigation non-fatal warning for {platform}: {nav_err}")
 

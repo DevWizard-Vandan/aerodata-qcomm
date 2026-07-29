@@ -198,9 +198,29 @@ class SwiggyScraper:
                     store_id = response_json["data"].get("storeId") or response_json["data"].get("store_id") or store_id
                     
             store_info = {"storeId": store_id}
-            
             seen_ids = set()
-            self._extract_products_recursive(response_json, products, store_info, seen_ids=seen_ids)
+
+            # Inspect data.cards envelope if present
+            card_list = None
+            if isinstance(response_json, dict) and isinstance(response_json.get("data"), dict):
+                cards_val = response_json["data"].get("cards")
+                if isinstance(cards_val, list):
+                    card_list = cards_val
+
+            if card_list:
+                for card in card_list:
+                    if isinstance(card, dict):
+                        inner_card = card.get("card", {})
+                        if isinstance(inner_card, dict):
+                            card_card = inner_card.get("card", {})
+                            grid_elements = inner_card.get("gridElements", {})
+                            if card_card:
+                                self._extract_products_recursive(card_card, products, store_info, seen_ids=seen_ids)
+                            if grid_elements:
+                                self._extract_products_recursive(grid_elements, products, store_info, seen_ids=seen_ids)
+                        self._extract_products_recursive(card, products, store_info, seen_ids=seen_ids)
+            else:
+                self._extract_products_recursive(response_json, products, store_info, seen_ids=seen_ids)
             
             if not products and isinstance(response_json, (dict, list)):
                 logger.info("Swiggy Instamart layout parsed 0 products. Printing diagnostic top 3 key levels:")
