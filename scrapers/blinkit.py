@@ -27,6 +27,20 @@ class BlinkitScraper:
         self.api_url = api_url
 
     def fetch_page(self, lat: float, lng: float, network_manager=None, session_harvester=None, session_key=None):
+        try:
+            from scrapers.bootstrapper import fetch_live_catalog_payload
+            payloads = fetch_live_catalog_payload("Blinkit", lat, lng)
+            if payloads:
+                logger.info(f"Blinkit Direct Response Interception retrieved {len(payloads)} payloads.")
+                for p in payloads:
+                    if isinstance(p, dict) and any(k in p for k in ["tabs", "sections", "widgets", "merchant_id", "objects"]):
+                        return p
+                return payloads[0]
+        except Exception as boot_err:
+            logger.warning(f"Blinkit Direct Response Interception warning: {boot_err}")
+            if STRICT_PROD_MODE:
+                log_structured_error("Blinkit", self.api_url, "INTERCEPTION_ERROR", f"Blinkit interception failed: {boot_err}", zone=session_key, exc=boot_err)
+
         payload = {
             "latitude": lat,
             "longitude": lng,
@@ -51,19 +65,16 @@ class BlinkitScraper:
             "app_client_id": "consumer_web"
         }
 
-        # Resolve IP via network manager DNS fallback mapping to web domain
         resolved_ip = resolve_domain_with_fallback("blinkit.com")
         curl_opts = {}
         if resolved_ip:
             from curl_cffi import CurlOpt
             curl_opts[CurlOpt.RESOLVE] = [f"blinkit.com:443:{resolved_ip}"]
 
-        # Proxy support
         from scrapers.proxy_manager import ProxyManager
         proxy_mgr = ProxyManager()
         proxies = proxy_mgr.get_proxy_dict(session_key=session_key)
 
-        # Dynamic Cookie & Session Harvesting via Playwright Bootstrapper
         cookies = {}
         if session_harvester:
             cookies = session_harvester.harvest_session("Blinkit", network_manager, session_key=session_key)
@@ -77,9 +88,6 @@ class BlinkitScraper:
                 headers.update(session_ctx["headers"])
         except Exception as boot_err:
             logger.warning(f"Blinkit Playwright bootstrapper warning: {boot_err}")
-            if STRICT_PROD_MODE:
-                log_structured_error("Blinkit", self.api_url, "BOOTSTRAP_ERROR", f"Blinkit bootstrapper failed: {boot_err}", zone=session_key, exc=boot_err)
-                raise ScraperError(f"Blinkit bootstrapper failed: {boot_err}", status_code="BOOTSTRAP_ERROR", target_url=self.api_url, platform="Blinkit", zone=session_key) from boot_err
 
 
         import time

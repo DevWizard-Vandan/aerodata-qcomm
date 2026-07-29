@@ -28,9 +28,24 @@ class ZeptoScraper:
 
     def fetch_page(self, lat: float, lng: float, network_manager=None, session_harvester=None, session_key=None):
         """
-        Fetches the Zepto store layout page for a given latitude and longitude.
-        Uses curl_cffi with Chrome 124 impersonation, updated headers, and retry logic.
+        Fetches Zepto catalog layout by first attempting Playwright Direct Response Interception,
+        with fallback to curl_cffi requests.
         """
+        try:
+            from scrapers.bootstrapper import fetch_live_catalog_payload
+            payloads = fetch_live_catalog_payload("Zepto", lat, lng)
+            if payloads:
+                logger.info(f"Zepto Direct Response Interception retrieved {len(payloads)} payloads.")
+                # Combine list of payloads into a unified format or return the first containing items
+                for p in payloads:
+                    if isinstance(p, dict) and any(k in p for k in ["layout", "widgets", "items", "data", "storeDetails"]):
+                        return p
+                return payloads[0]
+        except Exception as boot_err:
+            logger.warning(f"Zepto Direct Response Interception warning: {boot_err}")
+            if STRICT_PROD_MODE:
+                log_structured_error("Zepto", self.api_url, "INTERCEPTION_ERROR", f"Zepto interception failed: {boot_err}", zone=session_key, exc=boot_err)
+
         payload = {
             "latitude": lat,
             "longitude": lng,
@@ -57,19 +72,16 @@ class ZeptoScraper:
             "longitude": str(lng)
         }
         
-        # 1. Resolve host with programmatic UDP fallback
         resolved_ip = resolve_domain_with_fallback("api.zepto.com")
         curl_opts = {}
         if resolved_ip:
             from curl_cffi import CurlOpt
             curl_opts[CurlOpt.RESOLVE] = [f"api.zepto.com:443:{resolved_ip}"]
             
-        # 2. Proxy support
         from scrapers.proxy_manager import ProxyManager
         proxy_mgr = ProxyManager()
         proxies = proxy_mgr.get_proxy_dict(session_key=session_key)
         
-        # 3. Dynamic Cookie & Session Harvesting via Playwright Bootstrapper
         cookies = {}
         if session_harvester:
             cookies = session_harvester.harvest_session("Zepto", network_manager, session_key=session_key)
@@ -83,9 +95,7 @@ class ZeptoScraper:
                 headers.update(session_ctx["headers"])
         except Exception as boot_err:
             logger.warning(f"Zepto Playwright bootstrapper warning: {boot_err}")
-            if STRICT_PROD_MODE:
-                log_structured_error("Zepto", self.api_url, "BOOTSTRAP_ERROR", f"Zepto bootstrapper failed: {boot_err}", zone=session_key, exc=boot_err)
-                raise ScraperError(f"Zepto bootstrapper failed: {boot_err}", status_code="BOOTSTRAP_ERROR", target_url=self.api_url, platform="Zepto", zone=session_key) from boot_err
+
         import time
         max_retries = 3
         last_exception = None

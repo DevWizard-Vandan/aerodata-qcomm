@@ -27,6 +27,20 @@ class SwiggyScraper:
         self.api_url = api_url
 
     def fetch_page(self, lat: float, lng: float, network_manager=None, session_harvester=None, session_key=None):
+        try:
+            from scrapers.bootstrapper import fetch_live_catalog_payload
+            payloads = fetch_live_catalog_payload("Swiggy Instamart", lat, lng)
+            if payloads:
+                logger.info(f"Swiggy Instamart Direct Response Interception retrieved {len(payloads)} payloads.")
+                for p in payloads:
+                    if isinstance(p, dict) and any(k in p for k in ["data", "widgets", "storeId", "menu", "page"]):
+                        return p
+                return payloads[0]
+        except Exception as boot_err:
+            logger.warning(f"Swiggy Instamart Direct Response Interception warning: {boot_err}")
+            if STRICT_PROD_MODE:
+                log_structured_error("Swiggy Instamart", self.api_url, "INTERCEPTION_ERROR", f"Swiggy interception failed: {boot_err}", zone=session_key, exc=boot_err)
+
         headers = {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
@@ -53,12 +67,10 @@ class SwiggyScraper:
             from curl_cffi import CurlOpt
             curl_opts[CurlOpt.RESOLVE] = [f"www.swiggy.com:443:{resolved_ip}"]
 
-        # Proxy support
         from scrapers.proxy_manager import ProxyManager
         proxy_mgr = ProxyManager()
         proxies = proxy_mgr.get_proxy_dict(session_key=session_key)
 
-        # Dynamic Cookie & Session Harvesting via Playwright Bootstrapper
         cookies = {}
         if session_harvester:
             cookies = session_harvester.harvest_session("Swiggy Instamart", network_manager, session_key=session_key)
@@ -72,11 +84,7 @@ class SwiggyScraper:
                 headers.update(session_ctx["headers"])
         except Exception as boot_err:
             logger.warning(f"Swiggy Instamart Playwright bootstrapper warning: {boot_err}")
-            if STRICT_PROD_MODE:
-                log_structured_error("Swiggy Instamart", self.api_url, "BOOTSTRAP_ERROR", f"Swiggy bootstrapper failed: {boot_err}", zone=session_key, exc=boot_err)
-                raise ScraperError(f"Swiggy bootstrapper failed: {boot_err}", status_code="BOOTSTRAP_ERROR", target_url=self.api_url, platform="Swiggy Instamart", zone=session_key) from boot_err
             
-        # Merge target coordinate cookies
         cookies["lat"] = str(lat)
         cookies["lng"] = str(lng)
         cookies["_instamart_lat"] = str(lat)
