@@ -200,26 +200,33 @@ class SwiggyScraper:
             store_info = {"storeId": store_id}
             seen_ids = set()
 
-            # Inspect data.cards envelope if present
-            card_list = None
+            # Inspect data.categories and data.cards envelopes if present
             if isinstance(response_json, dict) and isinstance(response_json.get("data"), dict):
-                cards_val = response_json["data"].get("cards")
+                data_obj = response_json["data"]
+                
+                # Process 144-category taxonomy array
+                categories_val = data_obj.get("categories")
+                if isinstance(categories_val, list):
+                    for cat in categories_val:
+                        self._extract_products_recursive(cat, products, store_info, seen_ids=seen_ids)
+                
+                # Process cards array
+                cards_val = data_obj.get("cards")
                 if isinstance(cards_val, list):
-                    card_list = cards_val
+                    for card in cards_val:
+                        if isinstance(card, dict):
+                            inner_card = card.get("card", {})
+                            if isinstance(inner_card, dict):
+                                card_card = inner_card.get("card", {})
+                                grid_elements = inner_card.get("gridElements", {})
+                                if card_card:
+                                    self._extract_products_recursive(card_card, products, store_info, seen_ids=seen_ids)
+                                if grid_elements:
+                                    self._extract_products_recursive(grid_elements, products, store_info, seen_ids=seen_ids)
+                            self._extract_products_recursive(card, products, store_info, seen_ids=seen_ids)
 
-            if card_list:
-                for card in card_list:
-                    if isinstance(card, dict):
-                        inner_card = card.get("card", {})
-                        if isinstance(inner_card, dict):
-                            card_card = inner_card.get("card", {})
-                            grid_elements = inner_card.get("gridElements", {})
-                            if card_card:
-                                self._extract_products_recursive(card_card, products, store_info, seen_ids=seen_ids)
-                            if grid_elements:
-                                self._extract_products_recursive(grid_elements, products, store_info, seen_ids=seen_ids)
-                        self._extract_products_recursive(card, products, store_info, seen_ids=seen_ids)
-            else:
+            # Fallback scan if data envelopes didn't extract any products
+            if not products:
                 self._extract_products_recursive(response_json, products, store_info, seen_ids=seen_ids)
             
             if not products and isinstance(response_json, (dict, list)):
@@ -269,7 +276,10 @@ class SwiggyScraper:
                     products_list.append(prod)
                     return
 
-            target_keys = ['cards', 'card', 'gridElements', 'infoWithStyle', 'widgets', 'itemCards', 'items', 'info']
+            target_keys = [
+                'categories', 'subCategories', 'items', 'products', 'skus', 'widgets', 
+                'gridElements', 'cards', 'card', 'infoWithStyle', 'itemCards', 'info'
+            ]
             for k in target_keys:
                 if k in node:
                     self._extract_products_recursive(node[k], products_list, store_info, seen_ids=seen_ids)
