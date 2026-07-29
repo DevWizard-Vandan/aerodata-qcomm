@@ -212,14 +212,15 @@ class SwiggyScraper:
 
     def _extract_products_recursive(self, node, products_list, store_info):
         if isinstance(node, dict):
-            has_id = "id" in node or "productId" in node or "product_id" in node
-            has_price = "price" in node or "mrp" in node or "sellingPrice" in node
+            has_id = "id" in node or "skuId" in node or "itemId" in node or "productId" in node or "product_id" in node
+            has_name = "name" in node or "title" in node or "displayName" in node or "productName" in node
+            has_price = "price" in node or "finalPrice" in node or "offerPrice" in node or "mrp" in node or "sellingPrice" in node
             
             if "product" in node and isinstance(node["product"], dict):
                 prod = self._parse_product_node(node["product"], store_info)
                 if prod:
                     products_list.append(prod)
-            elif has_id and has_price and "name" in node:
+            elif has_id and has_name and has_price:
                 prod = self._parse_product_node(node, store_info)
                 if prod:
                     products_list.append(prod)
@@ -232,31 +233,34 @@ class SwiggyScraper:
 
     def _parse_product_node(self, node, store_info):
         try:
-            product_id = node.get("id") or node.get("productId") or node.get("product_id")
-            product_name = node.get("name") or node.get("productName") or node.get("product_name") or node.get("title")
+            product_id = node.get("id") or node.get("skuId") or node.get("itemId") or node.get("productId") or node.get("product_id")
+            product_name = node.get("name") or node.get("title") or node.get("displayName") or node.get("productName") or node.get("product_name")
             if not product_id or not product_name:
                 return None
             
             brand_name = node.get("brand") or node.get("brandName") or node.get("brand_name") or "Unknown"
             category = node.get("categoryName") or node.get("category_name") or node.get("category") or "General"
             
-            mrp_paise = node.get("mrp") or node.get("originalPrice") or node.get("original_price") or node.get("price") or 0
-            selling_price_paise = node.get("sellingPrice") or node.get("selling_price") or node.get("discountPrice") or node.get("discount_price") or mrp_paise
+            mrp_val = node.get("mrp") or node.get("price") or node.get("finalPrice") or node.get("offerPrice") or node.get("originalPrice") or 0
+            selling_val = node.get("offerPrice") or node.get("finalPrice") or node.get("sellingPrice") or mrp_val
             
             try:
-                mrp = float(mrp_paise) / 100.0 if float(mrp_paise) > 100 else float(mrp_paise)
+                mrp = float(mrp_val) / 100.0 if float(mrp_val) > 100 else float(mrp_val)
             except (ValueError, TypeError):
                 mrp = 0.0
                 
             try:
-                discount_price = float(selling_price_paise) / 100.0 if float(selling_price_paise) > 100 else float(selling_price_paise)
+                discount_price = float(selling_val) / 100.0 if float(selling_val) > 100 else float(selling_val)
             except (ValueError, TypeError):
                 discount_price = mrp
-                
-            out_of_stock = node.get("outOfStock") or node.get("out_of_stock") or (node.get("stock", 1) == 0) or (node.get("status") == "OUT_OF_STOCK")
-            stock_status = not out_of_stock
+
+            in_stock = node.get("inStock") or node.get("isAvailable") or (node.get("stock", 1) > 0)
+            if "outOfStock" in node:
+                in_stock = not node["outOfStock"]
+            if "out_of_stock" in node:
+                in_stock = not node["out_of_stock"]
             
-            store_id = store_info.get("storeId") or store_info.get("store_id") or "store_blr_indiranagar"
+            store_id = store_info.get("storeId") or store_info.get("store_id") or "store_swiggy_indiranagar"
             
             return {
                 "platform_name": "Swiggy Instamart",
@@ -267,7 +271,7 @@ class SwiggyScraper:
                 "brand_name": str(brand_name),
                 "listed_price": mrp,
                 "discount_price": discount_price,
-                "stock_status": bool(stock_status),
+                "stock_status": bool(in_stock),
                 "parent_ticker": "SWIGGY"
             }
         except Exception as e:

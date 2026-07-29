@@ -8,8 +8,9 @@ logger = logging.getLogger(__name__)
 
 def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms: int = 30000) -> list:
     """
-    Launches Playwright Chromium in headless mode, setting geolocation permissions,
-    and attaches a network response listener before navigation to capture raw JSON catalog/product structures directly.
+    Launches Playwright Chromium in headless mode with spatial geolocation permissions,
+    attaches a network response listener before navigation, and executes subtle scroll interactions
+    to trigger lazy-loaded XHR catalog responses.
     """
     logger.info(f"Initiating Playwright Direct Response Interception for '{platform}' at ({lat}, {lng})...")
     
@@ -60,7 +61,14 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(3000)
+                
+                # Execute subtle scroll interactions for Zepto and Blinkit to trigger catalog XHR fetches
+                if platform in ("Zepto", "Blinkit"):
+                    page.evaluate("window.scrollBy(0, 500)")
+                    page.wait_for_timeout(3000)
+                else:
+                    page.wait_for_timeout(3000)
             except Exception as nav_err:
                 logger.warning(f"Playwright navigation non-fatal warning for {platform}: {nav_err}")
 
