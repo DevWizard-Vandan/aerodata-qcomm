@@ -15,8 +15,8 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
     logger.info(f"Initiating Playwright Direct Response Interception for '{platform}' at ({lat}, {lng})...")
     
     target_urls = {
-        "Zepto": "https://www.zeptonow.com/",
-        "Blinkit": "https://blinkit.com/",
+        "Zepto": "https://www.zeptonow.com/cn/dairy-bread-eggs/cid/21b3fa12-1f48-4e8a-bf90-349f863d1efc",
+        "Blinkit": "https://blinkit.com/cn/fresh-vegetables/cid/1487/1489",
         "Swiggy Instamart": "https://www.swiggy.com/instamart"
     }
     
@@ -48,11 +48,11 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             
             def handle_response(response):
                 content_type = response.headers.get("content-type", "").lower()
-                if "json" in content_type:
+                if "json" in content_type or content_type.endswith("/json"):
                     try:
                         data = response.json()
                         str_data = str(data).lower()
-                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories"]):
+                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "cards", "gridelements"]):
                             captured_payloads.append(data)
                     except Exception:
                         pass
@@ -68,6 +68,7 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                     page.evaluate("window.scrollBy(0, 500)")
                     page.wait_for_timeout(3000)
                 else:
+                    page.evaluate("window.scrollBy(0, 500)")
                     page.wait_for_timeout(3000)
             except Exception as nav_err:
                 logger.warning(f"Playwright navigation non-fatal warning for {platform}: {nav_err}")
@@ -95,8 +96,8 @@ def get_live_session_context(platform: str, lat: float, lng: float, timeout_ms: 
     logger.info(f"Initiating Playwright session bootstrapper for platform '{platform}' at ({lat}, {lng})...")
     
     target_urls = {
-        "Zepto": "https://www.zeptonow.com/",
-        "Blinkit": "https://blinkit.com/",
+        "Zepto": "https://www.zeptonow.com/cn/dairy-bread-eggs/cid/21b3fa12-1f48-4e8a-bf90-349f863d1efc",
+        "Blinkit": "https://blinkit.com/cn/fresh-vegetables/cid/1487/1489",
         "Swiggy Instamart": "https://www.swiggy.com/instamart"
     }
     

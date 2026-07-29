@@ -199,7 +199,12 @@ class SwiggyScraper:
                     
             store_info = {"storeId": store_id}
             
-            self._extract_products_recursive(response_json, products, store_info)
+            seen_ids = set()
+            self._extract_products_recursive(response_json, products, store_info, seen_ids=seen_ids)
+            
+            if not products and isinstance(response_json, (dict, list)):
+                logger.info("Swiggy Instamart layout parsed 0 products. Printing diagnostic top 3 key levels:")
+                self._log_payload_keys(response_json, level=1, max_level=3)
         except Exception as e:
             if STRICT_PROD_MODE:
                 log_structured_error("Swiggy Instamart", self.api_url, "PARSING_ERROR", f"Layout parsing failed: {e}", exc=e)
@@ -210,26 +215,51 @@ class SwiggyScraper:
         logger.info(f"Swiggy Instamart parsed {len(products)} products from layout response.")
         return products
 
-    def _extract_products_recursive(self, node, products_list, store_info):
+    def _log_payload_keys(self, node, level=1, max_level=3, path="root"):
+        if level > max_level:
+            return
         if isinstance(node, dict):
-            has_id = "id" in node or "skuId" in node or "itemId" in node or "productId" in node or "product_id" in node
-            has_name = "name" in node or "title" in node or "displayName" in node or "productName" in node
-            has_price = "price" in node or "finalPrice" in node or "offerPrice" in node or "mrp" in node or "sellingPrice" in node
-            
+            keys = list(node.keys())
+            logger.info(f"Diagnostic Payload Keys [Level {level} - {path}]: {keys[:20]}")
+            for k in keys[:5]:
+                val = node[k]
+                if isinstance(val, (dict, list)):
+                    self._log_payload_keys(val, level + 1, max_level, f"{path}.{k}")
+        elif isinstance(node, list) and node:
+            logger.info(f"Diagnostic Payload List [Level {level} - {path}]: length {len(node)}")
+            self._log_payload_keys(node[0], level + 1, max_level, f"{path}[0]")
+
+    def _extract_products_recursive(self, node, products_list, store_info, seen_ids=None):
+        if seen_ids is None:
+            seen_ids = set()
+
+        if isinstance(node, dict):
+            info_node = node.get("info") if isinstance(node.get("info"), dict) else node
             if "product" in node and isinstance(node["product"], dict):
-                prod = self._parse_product_node(node["product"], store_info)
-                if prod:
+                info_node = node["product"]
+
+            has_id = any(k in info_node for k in ["id", "skuId", "itemId", "productId", "product_id"])
+            has_name = any(k in info_node for k in ["name", "title", "displayName", "productName", "product_name"])
+            has_price = any(k in info_node for k in ["price", "finalPrice", "offerPrice", "mrp", "sellingPrice", "originalPrice"])
+            
+            if has_id and has_name and has_price:
+                prod = self._parse_product_node(info_node, store_info)
+                if prod and prod["product_id"] not in seen_ids:
+                    seen_ids.add(prod["product_id"])
                     products_list.append(prod)
-            elif has_id and has_name and has_price:
-                prod = self._parse_product_node(node, store_info)
-                if prod:
-                    products_list.append(prod)
-            else:
-                for val in node.values():
-                    self._extract_products_recursive(val, products_list, store_info)
+                    return
+
+            target_keys = ['cards', 'card', 'gridElements', 'infoWithStyle', 'widgets', 'itemCards', 'items', 'info']
+            for k in target_keys:
+                if k in node:
+                    self._extract_products_recursive(node[k], products_list, store_info, seen_ids=seen_ids)
+
+            for k, val in node.items():
+                if k not in target_keys:
+                    self._extract_products_recursive(val, products_list, store_info, seen_ids=seen_ids)
         elif isinstance(node, list):
             for item in node:
-                self._extract_products_recursive(item, products_list, store_info)
+                self._extract_products_recursive(item, products_list, store_info, seen_ids=seen_ids)
 
     def _parse_product_node(self, node, store_info):
         try:
