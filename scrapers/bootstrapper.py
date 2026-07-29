@@ -6,10 +6,10 @@ from scrapers.exceptions import STRICT_PROD_MODE, ScraperError, log_structured_e
 
 logger = logging.getLogger(__name__)
 
-def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms: int = 25000) -> list:
+def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms: int = 30000) -> list:
     """
-    Launches Playwright Chromium in headless mode, setting geolocation,
-    and intercepts incoming network responses to capture raw JSON catalog/product payloads.
+    Launches Playwright Chromium in headless mode, setting geolocation permissions,
+    and attaches a network response listener before navigation to capture raw JSON catalog/product structures directly.
     """
     logger.info(f"Initiating Playwright Direct Response Interception for '{platform}' at ({lat}, {lng})...")
     
@@ -51,7 +51,7 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                     try:
                         data = response.json()
                         str_data = str(data).lower()
-                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items"]):
+                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories"]):
                             captured_payloads.append(data)
                     except Exception:
                         pass
@@ -60,7 +60,7 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(6000)
             except Exception as nav_err:
                 logger.warning(f"Playwright navigation non-fatal warning for {platform}: {nav_err}")
 
