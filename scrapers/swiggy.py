@@ -32,10 +32,7 @@ class SwiggyScraper:
             payloads = fetch_live_catalog_payload("Swiggy Instamart", lat, lng)
             if payloads:
                 logger.info(f"Swiggy Instamart Direct Response Interception retrieved {len(payloads)} payloads.")
-                for p in payloads:
-                    if isinstance(p, dict) and any(k in p for k in ["data", "widgets", "storeId", "menu", "page"]):
-                        return p
-                return payloads[0]
+                return payloads
         except Exception as boot_err:
             logger.warning(f"Swiggy Instamart Direct Response Interception warning: {boot_err}")
             if STRICT_PROD_MODE:
@@ -188,6 +185,16 @@ class SwiggyScraper:
 
         products = []
         try:
+            seen_ids = set()
+            if isinstance(response_json, list):
+                for p in response_json:
+                    sub_prods = self.parse_layout(p)
+                    for sp in sub_prods:
+                        if sp["product_id"] not in seen_ids:
+                            seen_ids.add(sp["product_id"])
+                            products.append(sp)
+                return products
+
             store_id = "store_swiggy_indiranagar"
             if isinstance(response_json, dict):
                 if "storeId" in response_json:
@@ -198,7 +205,6 @@ class SwiggyScraper:
                     store_id = response_json["data"].get("storeId") or response_json["data"].get("store_id") or store_id
                     
             store_info = {"storeId": store_id}
-            seen_ids = set()
 
             # Inspect data.categories and data.cards envelopes if present
             if isinstance(response_json, dict) and isinstance(response_json.get("data"), dict):
@@ -256,6 +262,31 @@ class SwiggyScraper:
             logger.info(f"Diagnostic Payload List [Level {level} - {path}]: length {len(node)}")
             self._log_payload_keys(node[0], level + 1, max_level, f"{path}[0]")
 
+    def _extract_number_from_price_obj(self, val):
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return None
+        if isinstance(val, dict):
+            if "units" in val and val["units"] is not None:
+                try:
+                    units = float(val["units"])
+                    nanos = float(val.get("nanos", 0)) / 1e9 if val.get("nanos") else 0.0
+                    return units + nanos
+                except (ValueError, TypeError):
+                    pass
+            for inner_k in ["offerPrice", "value", "price", "mrp", "sellingPrice", "originalPrice"]:
+                if inner_k in val and val[inner_k] is not None:
+                    extracted = self._extract_number_from_price_obj(val[inner_k])
+                    if extracted is not None:
+                        return extracted
+        return None
+
     def _extract_products_recursive(self, node, products_list, store_info, seen_ids=None):
         if seen_ids is None:
             seen_ids = set()
@@ -265,20 +296,15 @@ class SwiggyScraper:
             if "product" in node and isinstance(node["product"], dict):
                 info_node = node["product"]
 
-            has_id = any(k in info_node for k in ["id", "skuId", "itemId", "productId", "product_id"])
-            has_name = any(k in info_node for k in ["name", "title", "displayName", "productName", "product_name"])
-            has_price = any(k in info_node for k in ["price", "finalPrice", "offerPrice", "mrp", "sellingPrice", "originalPrice"])
-            
-            if has_id and has_name and has_price:
-                prod = self._parse_product_node(info_node, store_info)
-                if prod and prod["product_id"] not in seen_ids:
-                    seen_ids.add(prod["product_id"])
-                    products_list.append(prod)
-                    return
+            prod = self._parse_product_node(info_node, store_info)
+            if prod and prod["product_id"] not in seen_ids:
+                seen_ids.add(prod["product_id"])
+                products_list.append(prod)
+                return
 
             target_keys = [
                 'categories', 'subCategories', 'items', 'products', 'skus', 'widgets', 
-                'gridElements', 'cards', 'card', 'infoWithStyle', 'itemCards', 'info'
+                'gridElements', 'cards', 'card', 'cardList', 'infoWithStyle', 'itemCards', 'info'
             ]
             for k in target_keys:
                 if k in node:
@@ -291,48 +317,110 @@ class SwiggyScraper:
             for item in node:
                 self._extract_products_recursive(item, products_list, store_info, seen_ids=seen_ids)
 
-    def _parse_product_node(self, node, store_info):
+    def _parse_product_node(self, node, store_info=None):
+        if not isinstance(node, dict):
+            return None
         try:
-            product_id = node.get("id") or node.get("skuId") or node.get("itemId") or node.get("productId") or node.get("product_id")
-            product_name = node.get("name") or node.get("title") or node.get("displayName") or node.get("productName") or node.get("product_name")
-            if not product_id or not product_name:
-                return None
-            
-            brand_name = node.get("brand") or node.get("brandName") or node.get("brand_name") or "Unknown"
-            category = node.get("categoryName") or node.get("category_name") or node.get("category") or "General"
-            
-            mrp_val = node.get("mrp") or node.get("price") or node.get("finalPrice") or node.get("offerPrice") or node.get("originalPrice") or 0
-            selling_val = node.get("offerPrice") or node.get("finalPrice") or node.get("sellingPrice") or mrp_val
-            
-            try:
-                mrp = float(mrp_val) / 100.0 if float(mrp_val) > 100 else float(mrp_val)
-            except (ValueError, TypeError):
-                mrp = 0.0
-                
-            try:
-                discount_price = float(selling_val) / 100.0 if float(selling_val) > 100 else float(selling_val)
-            except (ValueError, TypeError):
-                discount_price = mrp
+            variations = node.get("variations") if isinstance(node.get("variations"), list) and len(node["variations"]) > 0 else []
+            v0 = variations[0] if variations and isinstance(variations[0], dict) else {}
 
-            in_stock = node.get("inStock") or node.get("isAvailable") or (node.get("stock", 1) > 0)
+            # ID Matching: Look for 'id', 'skuId', 'itemId', 'productId', or 'product_id'
+            id_val = (
+                node.get("id") or 
+                node.get("skuId") or 
+                node.get("itemId") or 
+                node.get("productId") or 
+                node.get("product_id") or
+                v0.get("skuId") or
+                v0.get("id") or
+                v0.get("spinId") or
+                v0.get("itemId") or
+                v0.get("productId")
+            )
+            if not id_val:
+                return None
+
+            # Name Matching: Look for 'name', 'displayName', 'title', 'productName', or 'product_name'
+            name_val = (
+                node.get("name") or 
+                node.get("displayName") or 
+                node.get("title") or 
+                node.get("productName") or 
+                node.get("product_name") or
+                v0.get("displayName") or
+                v0.get("name") or
+                v0.get("title")
+            )
+            if not name_val:
+                return None
+
+            # Price Extraction Logic
+            raw_price = None
+
+            # 1. Check flat keys: 'offerPrice', 'finalPrice', 'mrp', 'price', 'sellingPrice', 'originalPrice'
+            flat_price_keys = ['offerPrice', 'finalPrice', 'mrp', 'price', 'sellingPrice', 'originalPrice']
+            for k in flat_price_keys:
+                if k in node and node[k] is not None:
+                    num = self._extract_number_from_price_obj(node[k])
+                    if num is not None:
+                        raw_price = num
+                        break
+
+            # 2. Check nested 'variations': If 'variations' in node and is a non-empty list
+            if raw_price is None and v0:
+                for k in ['price', 'offerPrice', 'mrp', 'finalPrice', 'sellingPrice']:
+                    if k in v0 and v0[k] is not None:
+                        num = self._extract_number_from_price_obj(v0[k])
+                        if num is not None:
+                            raw_price = num
+                            break
+
+            # 3. Check nested 'price' dict: If 'price' in node and is a dict
+            if raw_price is None and "price" in node:
+                num = self._extract_number_from_price_obj(node["price"])
+                if num is not None:
+                    raw_price = num
+
+            if raw_price is None:
+                return None
+
+            price_val = float(raw_price)
+
+            # Automatically convert paise values to INR when > 100
+            if price_val > 100:
+                price_val = price_val / 100.0
+
+            # Stock status calculation
+            in_stock = node.get("inStock") or node.get("isAvailable") or v0.get("inStock") or (node.get("stock", 1) > 0)
             if "outOfStock" in node:
                 in_stock = not node["outOfStock"]
             if "out_of_stock" in node:
                 in_stock = not node["out_of_stock"]
-            
+            stock_val = bool(in_stock)
+
+            if not store_info:
+                store_info = {}
             store_id = store_info.get("storeId") or store_info.get("store_id") or "store_swiggy_indiranagar"
-            
+            brand_name = node.get("brand") or node.get("brandName") or node.get("brand_name") or v0.get("brandName") or v0.get("brand") or "Unknown"
+            category = node.get("categoryName") or node.get("category_name") or node.get("category") or "General"
+
+            # Construct canonical product dictionary with pipeline compatibility fields
             return {
-                "platform_name": "Swiggy Instamart",
-                "store_id": str(store_id),
-                "product_id": str(product_id),
-                "product_name": str(product_name),
-                "category": str(category),
-                "brand_name": str(brand_name),
-                "listed_price": mrp,
-                "discount_price": discount_price,
-                "stock_status": bool(in_stock),
-                "parent_ticker": "SWIGGY"
+                'product_id': str(id_val),
+                'name': str(name_val),
+                'price': float(price_val),
+                'in_stock': bool(stock_val),
+                'platform': 'Swiggy Instamart',
+                # Extended fields for database ingestion & pipeline compatibility
+                'product_name': str(name_val),
+                'platform_name': 'Swiggy Instamart',
+                'listed_price': float(price_val),
+                'discount_price': float(price_val),
+                'stock_status': bool(stock_val),
+                'category': str(category),
+                'brand_name': str(brand_name),
+                'store_id': str(store_id),
+                'parent_ticker': 'SWIGGY'
             }
         except Exception as e:
             logger.warning(f"Error parsing product node in Swiggy: {e}")

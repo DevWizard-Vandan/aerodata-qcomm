@@ -202,6 +202,83 @@ class ZeptoScraper:
         logger.info(f"Parsed {len(products)} products from the layout response.")
         return products
 
+    def _extract_products_recursive(self, node, products_list, store_info, seen_ids=None):
+        if seen_ids is None:
+            seen_ids = set()
+
+        if isinstance(node, dict):
+            info_node = node.get("product") if isinstance(node.get("product"), dict) else node
+            if "info" in node and isinstance(node["info"], dict):
+                info_node = node["info"]
+
+            prod = self._parse_product_node(info_node, store_info)
+            if prod and prod["product_id"] not in seen_ids:
+                seen_ids.add(prod["product_id"])
+                products_list.append(prod)
+                return
+
+            target_keys = [
+                'layout', 'widgets', 'items', 'products', 'gridElements', 'cards', 'data'
+            ]
+            for k in target_keys:
+                if k in node:
+                    self._extract_products_recursive(node[k], products_list, store_info, seen_ids=seen_ids)
+
+            for k, val in node.items():
+                if k not in target_keys:
+                    self._extract_products_recursive(val, products_list, store_info, seen_ids=seen_ids)
+        elif isinstance(node, list):
+            for item in node:
+                self._extract_products_recursive(item, products_list, store_info, seen_ids=seen_ids)
+
+    def _parse_product_node(self, node, store_info=None):
+        if not isinstance(node, dict):
+            return None
+        try:
+            product_id = node.get("id") or node.get("productId") or node.get("product_id")
+            product_name = node.get("name") or node.get("productName") or node.get("product_name") or node.get("title")
+            if not product_id or not product_name:
+                return None
+            
+            brand_name = node.get("brand") or node.get("brandName") or node.get("brand_name") or "Unknown"
+            category = node.get("categoryName") or node.get("category_name") or node.get("category") or "General"
+            
+            mrp_paise = node.get("mrp") or node.get("originalPrice") or node.get("price") or 0
+            selling_price_paise = node.get("sellingPrice") or node.get("selling_price") or node.get("discountPrice") or mrp_paise
+            
+            try:
+                mrp = float(mrp_paise) / 100.0 if float(mrp_paise) > 100 else float(mrp_paise)
+            except (ValueError, TypeError):
+                mrp = 0.0
+                
+            try:
+                discount_price = float(selling_price_paise) / 100.0 if float(selling_price_paise) > 100 else float(selling_price_paise)
+            except (ValueError, TypeError):
+                discount_price = mrp
+                
+            out_of_stock = node.get("outOfStock") or node.get("out_of_stock") or (node.get("stock", 1) == 0)
+            stock_status = not out_of_stock
+            
+            if not store_info:
+                store_info = {}
+            store_id = store_info.get("storeId") or store_info.get("store_id") or "store_zepto_indiranagar"
+            
+            return {
+                "platform_name": "Zepto",
+                "store_id": str(store_id),
+                "product_id": str(product_id),
+                "product_name": str(product_name),
+                "category": str(category),
+                "brand_name": str(brand_name),
+                "listed_price": mrp,
+                "discount_price": discount_price,
+                "stock_status": bool(stock_status),
+                "parent_ticker": "ZEPTO"
+            }
+        except Exception as e:
+            logger.warning(f"Error parsing product node in Zepto: {e}")
+            return None
+
     def _get_mock_response(self, lat, lng):
         if STRICT_PROD_MODE:
             err_msg = "Mock data generation disabled in STRICT_PROD_MODE for ZeptoScraper."
