@@ -63,6 +63,25 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(2000)
                 
+                if platform == "Zepto":
+                    try:
+                        # Click the first visible category tile or banner to trigger catalog XHR
+                        page.wait_for_selector('a[href*="/cn/"], [data-testid*="category"]', timeout=5000)
+                        category_el = page.locator('a[href*="/cn/"], [data-testid*="category"]').first
+                        category_el.click()
+                        page.wait_for_timeout(4000)
+                    except Exception as e:
+                        logger.warning(f"Zepto category click interaction fallback: {e}")
+                elif platform == "Blinkit":
+                    try:
+                        # Wait and click first category item or nav item
+                        page.wait_for_selector('a[href*="/cn/"], div[class*="Category"]', timeout=5000)
+                        nav_el = page.locator('a[href*="/cn/"], div[class*="Category"]').first
+                        nav_el.click()
+                        page.wait_for_timeout(4000)
+                    except Exception as e:
+                        logger.warning(f"Blinkit nav click interaction fallback: {e}")
+
                 # Execute multi-stage scroll to trigger lazy-loaded category XHR fetches
                 page.evaluate("window.scrollBy(0, 800)")
                 page.wait_for_timeout(2000)
