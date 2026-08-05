@@ -30,6 +30,9 @@ class SwiggyScraper:
         try:
             from scrapers.bootstrapper import fetch_live_catalog_payload
             payloads = fetch_live_catalog_payload("Swiggy Instamart", lat, lng)
+            if not payloads:
+                logger.warning("Swiggy Instamart direct response interception returned 0 payloads on attempt 1. Retrying...")
+                payloads = fetch_live_catalog_payload("Swiggy Instamart", lat, lng)
             if payloads:
                 logger.info(f"Swiggy Instamart Direct Response Interception retrieved {len(payloads)} payloads.")
                 return payloads

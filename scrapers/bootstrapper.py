@@ -81,6 +81,16 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                         page.wait_for_timeout(4000)
                     except Exception as e:
                         logger.warning(f"Blinkit nav click interaction fallback: {e}")
+                elif platform == "Swiggy Instamart":
+                    try:
+                        # Wait and click first visible category item or nav item
+                        page.wait_for_selector('a[href*="/instamart/"], [data-testid*="category"]', timeout=4000)
+                        swiggy_el = page.locator('a[href*="/instamart/"], [data-testid*="category"]').first
+                        if swiggy_el:
+                            swiggy_el.click(force=True, timeout=3000)
+                            page.wait_for_timeout(2000)
+                    except Exception as e:
+                        logger.warning(f"Swiggy Instamart category click interaction fallback: {e}")
 
                 # Execute multi-stage scroll to trigger lazy-loaded category XHR fetches
                 page.evaluate("window.scrollBy(0, 800)")
