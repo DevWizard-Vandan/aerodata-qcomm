@@ -17,7 +17,7 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
     target_urls = {
         "Zepto": "https://www.zeptonow.com/cn/dairy-bread-eggs/cid/21b3fa12-1f48-4e8a-bf90-349f863d1efc",
         "Blinkit": "https://blinkit.com/cn/fresh-vegetables/cid/1487/1489",
-        "Swiggy Instamart": "https://www.swiggy.com/instamart/category/dairy-bread-and-eggs"
+        "Swiggy Instamart": "https://www.swiggy.com/instamart"
     }
     
     target_url = target_urls.get(platform, "https://www.google.com")
@@ -96,9 +96,8 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                 elif platform == "Swiggy Instamart":
                     try:
                         # Wait and click first visible category item or nav item
-                        page.wait_for_selector('a[href*="/instamart/"], [data-testid*="category"]', timeout=4000)
-                        swiggy_el = page.locator('a[href*="/instamart/"], [data-testid*="category"]').first
-                        if swiggy_el:
+                        swiggy_el = page.locator('a[href*="instamart"], [data-testid*="category"], div[class*="Category"]').first
+                        if swiggy_el.is_visible(timeout=3000):
                             swiggy_el.click(force=True, timeout=3000)
                             page.wait_for_timeout(2000)
                     except Exception as e:
