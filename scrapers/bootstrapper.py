@@ -17,7 +17,7 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
     target_urls = {
         "Zepto": "https://www.zeptonow.com/cn/dairy-bread-eggs/cid/21b3fa12-1f48-4e8a-bf90-349f863d1efc",
         "Blinkit": "https://blinkit.com/cn/fresh-vegetables/cid/1487/1489",
-        "Swiggy Instamart": "https://www.swiggy.com/instamart"
+        "Swiggy Instamart": "https://www.swiggy.com/instamart/category/dairy-bread-and-eggs"
     }
     
     target_url = target_urls.get(platform, "https://www.google.com")
@@ -41,8 +41,20 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                 geolocation={"latitude": float(lat), "longitude": float(lng), "accuracy": 100},
                 permissions=["geolocation"],
                 viewport={"width": 1366, "height": 768},
-                user_agent=user_agent_str
+                user_agent=user_agent_str,
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"'
+                }
             )
+            
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            """)
             
             page = context.new_page()
             
@@ -52,7 +64,7 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                     try:
                         data = response.json()
                         str_data = str(data).lower()
-                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "cards", "gridelements"]):
+                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "variations", "storeid", "price", "mrp"]):
                             captured_payloads.append(data)
                     except Exception:
                         pass
@@ -92,11 +104,10 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                     except Exception as e:
                         logger.warning(f"Swiggy Instamart category click interaction fallback: {e}")
 
-                # Execute multi-stage scroll to trigger lazy-loaded category XHR fetches
-                page.evaluate("window.scrollBy(0, 800)")
-                page.wait_for_timeout(2000)
-                page.evaluate("window.scrollBy(0, 800)")
-                page.wait_for_timeout(3000)
+                # Execute 3-stage dynamic window scrolling with 2500ms wait timeouts between stages
+                for _ in range(3):
+                    page.evaluate("window.scrollBy(0, 800)")
+                    page.wait_for_timeout(2500)
             except Exception as nav_err:
                 logger.warning(f"Playwright navigation non-fatal warning for {platform}: {nav_err}")
 
