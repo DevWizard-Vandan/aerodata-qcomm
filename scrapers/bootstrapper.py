@@ -103,10 +103,10 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                     except Exception as e:
                         logger.warning(f"Swiggy Instamart category click interaction fallback: {e}")
 
-                # Execute 3-stage dynamic window scrolling with 2500ms wait timeouts between stages
-                for _ in range(3):
-                    page.evaluate("window.scrollBy(0, 800)")
-                    page.wait_for_timeout(2500)
+                # Execute 5-stage dynamic window scrolling to trigger lazy-loaded XHR catalog fetches
+                for stage in range(1, 6):
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    page.wait_for_timeout(2000)
             except Exception as nav_err:
                 logger.warning(f"Playwright navigation non-fatal warning for {platform}: {nav_err}")
 
