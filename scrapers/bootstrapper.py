@@ -15,9 +15,9 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
     logger.info(f"Initiating Playwright Direct Response Interception for '{platform}' at ({lat}, {lng})...")
     
     target_urls = {
-        "Zepto": "https://www.zeptonow.com/cn/dairy-bread-eggs/cid/21b3fa12-1f48-4e8a-bf90-349f863d1efc",
-        "Blinkit": "https://blinkit.com/cn/fresh-vegetables/cid/1487/1489",
-        "Swiggy Instamart": "https://www.swiggy.com/instamart"
+        "Zepto": "https://www.zeptonow.com/search?query=milk",
+        "Blinkit": "https://blinkit.com/s/?q=milk",
+        "Swiggy Instamart": "https://www.swiggy.com/instamart/search?custom_back=true&query=milk"
     }
     
     target_url = target_urls.get(platform, "https://www.google.com")
