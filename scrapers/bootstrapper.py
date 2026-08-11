@@ -58,20 +58,20 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             
             # Inject spatial geolocation cookies for Swiggy, Zepto, Blinkit
             cookies_to_add = [
-                {"name": "lat", "value": str(lat), "domain": ".swiggy.com", "path": "/"},
-                {"name": "lng", "value": str(lng), "domain": ".swiggy.com", "path": "/"},
-                {"name": "_instamart_lat", "value": str(lat), "domain": ".swiggy.com", "path": "/"},
-                {"name": "_instamart_lng", "value": str(lng), "domain": ".swiggy.com", "path": "/"},
-                {"name": "swiggy_location", "value": f"{lat}%2C{lng}", "domain": ".swiggy.com", "path": "/"},
-                {"name": "latitude", "value": str(lat), "domain": ".zeptonow.com", "path": "/"},
-                {"name": "longitude", "value": str(lng), "domain": ".zeptonow.com", "path": "/"},
-                {"name": "lat", "value": str(lat), "domain": ".blinkit.com", "path": "/"},
-                {"name": "lon", "value": str(lng), "domain": ".blinkit.com", "path": "/"}
+                {"name": "lat", "value": str(lat), "url": "https://www.swiggy.com"},
+                {"name": "lng", "value": str(lng), "url": "https://www.swiggy.com"},
+                {"name": "_instamart_lat", "value": str(lat), "url": "https://www.swiggy.com"},
+                {"name": "_instamart_lng", "value": str(lng), "url": "https://www.swiggy.com"},
+                {"name": "swiggy_location", "value": f"{lat}%2C{lng}", "url": "https://www.swiggy.com"},
+                {"name": "latitude", "value": str(lat), "url": "https://www.zeptonow.com"},
+                {"name": "longitude", "value": str(lng), "url": "https://www.zeptonow.com"},
+                {"name": "lat", "value": str(lat), "url": "https://blinkit.com"},
+                {"name": "lon", "value": str(lng), "url": "https://blinkit.com"}
             ]
             try:
                 context.add_cookies(cookies_to_add)
-            except Exception:
-                pass
+            except Exception as cookie_err:
+                logger.warning(f"Failed to add location cookies: {cookie_err}")
             
             page = context.new_page()
             
