@@ -76,15 +76,21 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             page = context.new_page()
             
             def handle_response(response):
-                content_type = response.headers.get("content-type", "").lower()
-                if "json" in content_type or content_type.endswith("/json"):
-                    try:
-                        data = response.json()
-                        str_data = str(data).lower()
-                        if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "variations", "storeid", "price", "mrp"]):
-                            captured_payloads.append(data)
-                    except Exception:
-                        pass
+                try:
+                    if response.status not in (200, 201):
+                        return
+                    ct = response.headers.get("content-type", "").lower()
+                    if "json" in ct or "application/json" in ct or ct.endswith("/json"):
+                        try:
+                            body = response.text()
+                            data = json.loads(body)
+                            str_data = str(data).lower()
+                            if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "variations", "storeid", "price", "mrp", "search", "searchresult"]):
+                                captured_payloads.append(data)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             
             page.on("response", handle_response)
             
@@ -94,31 +100,28 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                 
                 if platform == "Zepto":
                     try:
-                        # Click the first visible category tile or banner to trigger catalog XHR
-                        page.wait_for_selector('a[href*="/cn/"], [data-testid*="category"]', timeout=5000)
-                        category_el = page.locator('a[href*="/cn/"], [data-testid*="category"]').first
-                        category_el.click()
-                        page.wait_for_timeout(4000)
-                    except Exception as e:
-                        logger.warning(f"Zepto category click interaction fallback: {e}")
+                        cat_el = page.locator('a[href*="/cn/"], [data-testid*="category"]').first
+                        if cat_el.is_visible(timeout=1000):
+                            cat_el.click()
+                            page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
                 elif platform == "Blinkit":
                     try:
-                        # Wait and click first category item or nav item
-                        page.wait_for_selector('a[href*="/cn/"], div[class*="Category"]', timeout=5000)
                         nav_el = page.locator('a[href*="/cn/"], div[class*="Category"]').first
-                        nav_el.click()
-                        page.wait_for_timeout(4000)
-                    except Exception as e:
-                        logger.warning(f"Blinkit nav click interaction fallback: {e}")
+                        if nav_el.is_visible(timeout=1000):
+                            nav_el.click()
+                            page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
                 elif platform == "Swiggy Instamart":
                     try:
-                        # Wait and click first visible category item or nav item
-                        swiggy_el = page.locator('a[href*="instamart"], [data-testid*="category"], div[class*="Category"]').first
-                        if swiggy_el.is_visible(timeout=3000):
-                            swiggy_el.click(force=True, timeout=3000)
+                        swiggy_el = page.locator('a[href*="/c/"], [data-testid*="category"]').first
+                        if swiggy_el.is_visible(timeout=1000):
+                            swiggy_el.click(force=True, timeout=1000)
                             page.wait_for_timeout(2000)
-                    except Exception as e:
-                        logger.warning(f"Swiggy Instamart category click interaction fallback: {e}")
+                    except Exception:
+                        pass
 
                 # Execute 5-stage dynamic window scrolling to trigger lazy-loaded XHR catalog fetches
                 for stage in range(1, 6):

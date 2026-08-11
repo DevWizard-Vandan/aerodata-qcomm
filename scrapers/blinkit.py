@@ -32,10 +32,7 @@ class BlinkitScraper:
             payloads = fetch_live_catalog_payload("Blinkit", lat, lng)
             if payloads:
                 logger.info(f"Blinkit Direct Response Interception retrieved {len(payloads)} payloads.")
-                for p in payloads:
-                    if isinstance(p, dict) and any(k in p for k in ["tabs", "sections", "widgets", "merchant_id", "objects"]):
-                        return p
-                return payloads[0]
+                return payloads
         except Exception as boot_err:
             logger.warning(f"Blinkit Direct Response Interception warning: {boot_err}")
             if STRICT_PROD_MODE:
@@ -187,6 +184,15 @@ class BlinkitScraper:
 
         products = []
         try:
+            seen_ids = set()
+            if isinstance(response_json, list):
+                for item in response_json:
+                    sub_prods = self.parse_layout(item)
+                    for sp in sub_prods:
+                        if sp["product_id"] not in seen_ids:
+                            seen_ids.add(sp["product_id"])
+                            products.append(sp)
+                return products
             store_id = "store_blinkit_indiranagar"
             if isinstance(response_json, dict):
                 if "merchant_id" in response_json:
