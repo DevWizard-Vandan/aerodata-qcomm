@@ -84,19 +84,13 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             
             page = context.new_page()
             
+            raw_responses = []
             def handle_response(response):
                 try:
-                    if response.status not in (200, 201):
-                        return
-                    ct = response.headers.get("content-type", "").lower()
-                    if "json" in ct or "application/json" in ct or ct.endswith("/json"):
-                        try:
-                            data = response.json()
-                            str_data = str(data).lower()
-                            if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "variations", "storeid", "price", "mrp", "search", "searchresult"]):
-                                captured_payloads.append(data)
-                        except Exception:
-                            pass
+                    if response.status in (200, 201):
+                        ct = response.headers.get("content-type", "").lower()
+                        if any(j in ct for j in ["json", "javascript"]):
+                            raw_responses.append(response)
                 except Exception:
                     pass
             
@@ -110,11 +104,18 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
                     for _ in range(3):
                         page.evaluate("window.scrollBy(0, 1000)")
                         page.wait_for_timeout(1500)
-
-                    if captured_payloads:
-                        break
                 except Exception as nav_err:
                     logger.warning(f"Playwright navigation fallback for {platform} on {target_url}: {nav_err}")
+
+            for r in raw_responses:
+                try:
+                    body_bytes = r.body()
+                    data = json.loads(body_bytes.decode("utf-8", errors="ignore"))
+                    str_data = str(data).lower()
+                    if any(k in str_data for k in ["product", "catalog", "layout", "widgets", "items", "categories", "variations", "storeid", "price", "mrp", "search", "searchresult", "snippets"]):
+                        captured_payloads.append(data)
+                except Exception:
+                    pass
 
             browser.close()
 
