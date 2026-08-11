@@ -95,8 +95,12 @@ def fetch_live_catalog_payload(platform: str, lat: float, lng: float, timeout_ms
             page.on("response", handle_response)
             
             try:
-                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(2000)
+                try:
+                    page.goto(target_url, wait_until="networkidle", timeout=15000)
+                except Exception:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                
+                page.wait_for_timeout(6000)
                 
                 if platform == "Zepto":
                     try:
